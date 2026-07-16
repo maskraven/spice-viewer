@@ -135,9 +135,65 @@ func TestDestroyAndReset(t *testing.T) {
 	if s := c.Surface(1); s != nil {
 		t.Fatal("surface should be gone")
 	}
+	if c.TotalBytes() != 0 {
+		t.Fatalf("total bytes after destroy: %d", c.TotalBytes())
+	}
 	_ = c.CreateSurface(2, 8, 8, protocol.SurfaceFmt32ARGB, 0)
 	c.Reset()
 	if s := c.Surface(2); s != nil {
 		t.Fatal("reset should clear")
+	}
+	if c.TotalBytes() != 0 || c.SurfaceCount() != 0 {
+		t.Fatal("reset should zero counters")
+	}
+}
+
+func TestEmptyClipNoDraw(t *testing.T) {
+	c := display.NewCompositor(nil)
+	_ = c.CreateSurface(0, 4, 4, protocol.SurfaceFmt32xRGB, protocol.SurfaceFlagPrimary)
+	// Green fill unclipped
+	_ = c.Fill(0, image.Rect(0, 0, 4, 4), [4]byte{0, 0xff, 0, 0xff}, nil)
+	// Red fill with empty clip list → no-op
+	empty := []image.Rectangle{}
+	if err := c.Fill(0, image.Rect(0, 0, 4, 4), [4]byte{0xff, 0, 0, 0xff}, empty); err != nil {
+		t.Fatal(err)
+	}
+	s := c.Surface(0)
+	if s.Pix[0] != 0 || s.Pix[1] != 0xff {
+		t.Fatalf("empty clip overwrote pixels: %v", s.Pix[:4])
+	}
+}
+
+func TestSurfaceCountCap(t *testing.T) {
+	c := display.NewCompositor(nil)
+	for i := 0; i < protocol.MaxSurfaces; i++ {
+		if err := c.CreateSurface(uint32(i), 8, 8, protocol.SurfaceFmt32xRGB, 0); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+	if err := c.CreateSurface(uint32(protocol.MaxSurfaces), 8, 8, protocol.SurfaceFmt32xRGB, 0); err == nil {
+		t.Fatal("expected surface count reject")
+	}
+}
+
+func TestCopyHashStable(t *testing.T) {
+	src := &codec.RGBA{
+		Width: 2, Height: 2, Stride: 8,
+		Pix: []byte{
+			0x10, 0x20, 0x30, 0xff, 0x10, 0x20, 0x30, 0xff,
+			0x10, 0x20, 0x30, 0xff, 0x10, 0x20, 0x30, 0xff,
+		},
+	}
+	run := func() string {
+		drv := display.NewNullDriver()
+		c := display.NewCompositor(drv)
+		_ = c.CreateSurface(0, 2, 2, protocol.SurfaceFmt32xRGB, protocol.SurfaceFlagPrimary)
+		_ = c.Copy(0, image.Rect(0, 0, 2, 2), src, image.Pt(0, 0), nil)
+		c.Mark()
+		return drv.Hash()
+	}
+	h1, h2 := run(), run()
+	if h1 == "" || h1 != h2 {
+		t.Fatalf("COPY hash unstable: %q %q", h1, h2)
 	}
 }

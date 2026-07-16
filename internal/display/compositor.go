@@ -9,18 +9,23 @@ import (
 	"sync"
 
 	"github.com/maskraven/virt-viewer/internal/codec"
+	"github.com/maskraven/virt-viewer/internal/protocol"
 )
 
 // Compositor owns surfaces and applies Phase-1 draw ops (FILL, COPY).
 // When a Driver is set, Present/Invalidate are called after mutations on the
 // primary surface.
+//
+// Memory bounds: per-surface MaxSurfaceBytes, plus MaxSurfaces and
+// MaxTotalSurfaceBytes across all surfaces (see protocol package).
 type Compositor struct {
-	mu       sync.Mutex
-	surfaces map[uint32]*Surface
-	primary  uint32
-	hasPrim  bool
-	driver   Driver
-	marked   bool // true after DISPLAY_MARK
+	mu         sync.Mutex
+	surfaces   map[uint32]*Surface
+	primary    uint32
+	hasPrim    bool
+	driver     Driver
+	marked     bool  // true after DISPLAY_MARK
+	totalBytes int64 // sum of allocated surface pixel buffers
 }
 
 // NewCompositor builds an empty compositor. driver may be nil (ops still apply
@@ -53,7 +58,22 @@ func (c *Compositor) PrimaryID() (uint32, bool) {
 	return c.primary, c.hasPrim
 }
 
-// CreateSurface allocates a surface. Rejects oversize dimensions and unknown formats.
+// SurfaceCount returns the number of live surfaces.
+func (c *Compositor) SurfaceCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.surfaces)
+}
+
+// TotalBytes returns total allocated pixel memory across surfaces.
+func (c *Compositor) TotalBytes() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.totalBytes
+}
+
+// CreateSurface allocates a surface. Rejects oversize dimensions, unknown
+// formats, too many surfaces, or total memory over MaxTotalSurfaceBytes.
 func (c *Compositor) CreateSurface(id uint32, width, height int, format, flags uint32) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -61,11 +81,20 @@ func (c *Compositor) CreateSurface(id uint32, width, height int, format, flags u
 	if _, exists := c.surfaces[id]; exists {
 		return fmt.Errorf("display: surface %d already exists", id)
 	}
+	if len(c.surfaces) >= protocol.MaxSurfaces {
+		return fmt.Errorf("display: surface count limit %d reached", protocol.MaxSurfaces)
+	}
 	s, err := newSurface(id, width, height, format, flags)
 	if err != nil {
 		return err
 	}
+	need := int64(len(s.Pix))
+	if c.totalBytes+need > protocol.MaxTotalSurfaceBytes {
+		return fmt.Errorf("display: total surface memory %d+%d exceeds max %d",
+			c.totalBytes, need, protocol.MaxTotalSurfaceBytes)
+	}
 	c.surfaces[id] = s
+	c.totalBytes += need
 	if s.Primary() || !c.hasPrim {
 		c.primary = id
 		c.hasPrim = true
@@ -80,16 +109,21 @@ func (c *Compositor) CreateSurface(id uint32, width, height int, format, flags u
 func (c *Compositor) DestroySurface(id uint32) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.surfaces[id]; !ok {
+	s, ok := c.surfaces[id]
+	if !ok {
 		return fmt.Errorf("display: surface %d not found", id)
+	}
+	c.totalBytes -= int64(len(s.Pix))
+	if c.totalBytes < 0 {
+		c.totalBytes = 0
 	}
 	delete(c.surfaces, id)
 	if c.hasPrim && c.primary == id {
 		c.hasPrim = false
 		c.primary = 0
 		// Pick another primary if any remain.
-		for sid, s := range c.surfaces {
-			if s.Primary() {
+		for sid, surf := range c.surfaces {
+			if surf.Primary() {
 				c.primary = sid
 				c.hasPrim = true
 				break
@@ -114,6 +148,7 @@ func (c *Compositor) Reset() {
 	c.primary = 0
 	c.hasPrim = false
 	c.marked = false
+	c.totalBytes = 0
 }
 
 // Mark records DISPLAY_MARK and presents the primary surface if any.
@@ -126,7 +161,11 @@ func (c *Compositor) Mark() {
 
 // Fill solid-fills dest on surface id with rgba (4 bytes R,G,B,A).
 // dest must be fully contained in the surface or an error is returned.
-// clip rects (if non-empty) further restrict the filled region.
+//
+// Clip semantics (nil vs empty):
+//   - clips == nil: no clipping; fill full dest
+//   - clips non-nil but empty: no drawable region (no-op fill)
+//   - clips non-empty: fill dest ∩ each clip rect
 func (c *Compositor) Fill(surfaceID uint32, dest image.Rectangle, rgba [4]byte, clips []image.Rectangle) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -143,6 +182,9 @@ func (c *Compositor) Fill(surfaceID uint32, dest image.Rectangle, rgba [4]byte, 
 	}
 
 	regions := clipRegions(dest, clips)
+	if len(regions) == 0 {
+		return nil
+	}
 	for _, r := range regions {
 		fillRect(s, r, rgba)
 	}
@@ -152,7 +194,7 @@ func (c *Compositor) Fill(surfaceID uint32, dest image.Rectangle, rgba [4]byte, 
 
 // Copy blits src image pixels into surface dest.
 // srcOrigin is the point in src corresponding to dest.Min (typically src_area.Min).
-// dest must be fully inside the surface.
+// dest must be fully inside the surface. Clip semantics match Fill (nil vs empty).
 func (c *Compositor) Copy(surfaceID uint32, dest image.Rectangle, src *codec.RGBA, srcOrigin image.Point, clips []image.Rectangle) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -172,6 +214,9 @@ func (c *Compositor) Copy(surfaceID uint32, dest image.Rectangle, src *codec.RGB
 	}
 
 	regions := clipRegions(dest, clips)
+	if len(regions) == 0 {
+		return nil
+	}
 	for _, r := range regions {
 		// Offset into source relative to dest.Min mapping.
 		dx := r.Min.X - dest.Min.X
@@ -201,10 +246,17 @@ func (c *Compositor) presentLocked(dirty image.Rectangle, full bool) {
 	c.driver.Invalidate(dirty)
 }
 
-// clipRegions returns dest intersected with each clip, or [dest] if no clips.
+// clipRegions returns dest regions after applying clips.
+//
+//	clips == nil  → no clipping (return [dest])
+//	len(clips)==0 → empty clip list (return nil — draw nothing)
+//	else          → dest ∩ each clip
 func clipRegions(dest image.Rectangle, clips []image.Rectangle) []image.Rectangle {
-	if len(clips) == 0 {
+	if clips == nil {
 		return []image.Rectangle{dest}
+	}
+	if len(clips) == 0 {
+		return nil
 	}
 	var out []image.Rectangle
 	for _, c := range clips {

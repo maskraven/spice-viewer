@@ -5,6 +5,7 @@ package codec_test
 
 import (
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/maskraven/virt-viewer/internal/codec"
@@ -47,7 +48,8 @@ func packSpiceBitmap(w, h int, topDown bool, b, g, r, a byte) []byte {
 }
 
 func TestDecodeSpiceImageRaw32(t *testing.T) {
-	// Solid red-ish: B=0x11 G=0x22 R=0x33 A=0x00 on wire → RGBA 33,22,11,00
+	// Solid red-ish: B=0x11 G=0x22 R=0x33 X=0x00 on wire → RGBA 33,22,11,FF
+	// (32BIT forces A=0xFF via DecodeBitmap; do not call ForceOpaque again).
 	data := packSpiceBitmap(2, 2, true, 0x11, 0x22, 0x33, 0x00)
 	img, err := codec.DecodeSpiceImage(data)
 	if err != nil {
@@ -59,13 +61,15 @@ func TestDecodeSpiceImageRaw32(t *testing.T) {
 	if len(img.Pix) != 16 {
 		t.Fatalf("pix len %d", len(img.Pix))
 	}
-	// First pixel RGBA
-	if img.Pix[0] != 0x33 || img.Pix[1] != 0x22 || img.Pix[2] != 0x11 {
-		t.Fatalf("pixel RGB = %02x%02x%02x want 332211", img.Pix[0], img.Pix[1], img.Pix[2])
+	// First pixel RGBA — alpha must be opaque without extra ForceOpaque.
+	if img.Pix[0] != 0x33 || img.Pix[1] != 0x22 || img.Pix[2] != 0x11 || img.Pix[3] != 0xff {
+		t.Fatalf("pixel RGBA = %02x%02x%02x%02x want 332211ff",
+			img.Pix[0], img.Pix[1], img.Pix[2], img.Pix[3])
 	}
-	codec.ForceOpaque(img)
-	if img.Pix[3] != 0xff {
-		t.Fatalf("alpha after ForceOpaque = %02x", img.Pix[3])
+	for i := 3; i < len(img.Pix); i += 4 {
+		if img.Pix[i] != 0xff {
+			t.Fatalf("pix[%d] alpha = %02x want ff", i, img.Pix[i])
+		}
 	}
 }
 
@@ -117,6 +121,13 @@ func TestDecodeSpiceImageUnsupportedType(t *testing.T) {
 	_, err := codec.DecodeSpiceImage(data)
 	if err == nil {
 		t.Fatal("expected error for LZ image")
+	}
+	var uerr *codec.UnsupportedImageError
+	if !errors.As(err, &uerr) || uerr.Type != protocol.ImageTypeLZRGB {
+		t.Fatalf("want UnsupportedImageError LZRGB, got %v", err)
+	}
+	if !errors.Is(err, codec.ErrUnsupportedImage) {
+		t.Fatalf("want ErrUnsupportedImage unwrap, got %v", err)
 	}
 }
 

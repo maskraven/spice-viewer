@@ -20,10 +20,17 @@ import (
 	"github.com/maskraven/virt-viewer/internal/protocol"
 )
 
+// opaqueBlack is used when soft-skipping a failed DRAW_COPY (leave region black).
+var opaqueBlack = [4]byte{0, 0, 0, 0xff}
+
 // Display is the Phase-1 SPICE display channel reader/handler.
 //
 // It consumes mini-header framed messages on a linked display connection,
 // applies allowlisted draw ops to a compositor, and ignores unsupported types.
+//
+// Draw/decode failures (unsupported image codecs, bounds, short payloads) are
+// soft-skipped: logged, optionally black-fill dest, and do not abort Run.
+// Unrecoverable I/O (read errors, init write failure, nil conn) still terminate Run.
 //
 // Session may already own DisplayConn after OpenChannels — construct a Display
 // with that conn and call Run (or HandleMessage for unit tests).
@@ -31,9 +38,11 @@ type Display struct {
 	conn net.Conn
 	comp *display.Compositor
 
-	mu       sync.Mutex
-	unknown  map[uint16]int // debug counts of ignored types
-	initSent bool
+	mu             sync.Mutex
+	unknown        map[uint16]int // ignored message types
+	imageSkipTypes map[uint8]int  // unsupported image types soft-skipped
+	drawSkips      int            // other soft-skipped draw/surface ops
+	initSent       bool
 }
 
 // NewDisplay wraps a linked display-channel connection and compositor.
@@ -44,9 +53,10 @@ func NewDisplay(conn net.Conn, comp *display.Compositor) *Display {
 		comp = display.NewCompositor(nil)
 	}
 	return &Display{
-		conn:    conn,
-		comp:    comp,
-		unknown: make(map[uint16]int),
+		conn:           conn,
+		comp:           comp,
+		unknown:        make(map[uint16]int),
+		imageSkipTypes: make(map[uint8]int),
 	}
 }
 
@@ -70,8 +80,8 @@ func (d *Display) SendInit() error {
 	return protocol.WriteMessage(d.conn, protocol.MsgcDisplayInit, body)
 }
 
-// Run sends DISPLAY_INIT then reads and handles messages until ctx cancel,
-// conn close, or a fatal decode/compositor error.
+// Run sends DISPLAY_INIT then reads and handles messages until ctx cancel or
+// conn close. Soft-skipped draw errors do not stop the loop.
 func (d *Display) Run(ctx context.Context) error {
 	if d == nil || d.conn == nil {
 		return fmt.Errorf("channel: display: nil conn")
@@ -95,6 +105,7 @@ func (d *Display) Run(ctx context.Context) error {
 			}
 			return err
 		}
+		// HandleMessage soft-fails draw errors; only nil-conn / write path returns fatal.
 		if err := d.HandleMessage(msg.Type, msg.Data); err != nil {
 			return err
 		}
@@ -103,6 +114,9 @@ func (d *Display) Run(ctx context.Context) error {
 
 // HandleMessage dispatches one server→client display message by type.
 // Exported for unit tests that inject wire bodies without a socket.
+//
+// Draw and surface op failures soft-return nil (see DrawSkipCount / ImageSkipCounts).
+// Fatal returns are reserved for rare local write failures (SET_ACK/PING replies).
 func (d *Display) HandleMessage(typ uint16, data []byte) error {
 	// Common channel messages (shared with all channels).
 	switch typ {
@@ -122,7 +136,8 @@ func (d *Display) HandleMessage(typ uint16, data []byte) error {
 
 	switch typ {
 	case protocol.MsgDisplayMode:
-		return d.handleMode(data)
+		d.handleMode(data)
+		return nil
 	case protocol.MsgDisplayMark:
 		d.comp.Mark()
 		return nil
@@ -130,13 +145,17 @@ func (d *Display) HandleMessage(typ uint16, data []byte) error {
 		d.comp.Reset()
 		return nil
 	case protocol.MsgDisplaySurfaceCreate:
-		return d.handleSurfaceCreate(data)
+		d.handleSurfaceCreate(data)
+		return nil
 	case protocol.MsgDisplaySurfaceDestroy:
-		return d.handleSurfaceDestroy(data)
+		d.handleSurfaceDestroy(data)
+		return nil
 	case protocol.MsgDisplayDrawFill:
-		return d.handleDrawFill(data)
+		d.handleDrawFill(data)
+		return nil
 	case protocol.MsgDisplayDrawCopy:
-		return d.handleDrawCopy(data)
+		d.handleDrawCopy(data)
+		return nil
 	default:
 		// Allowlisted but not yet implemented (should not happen).
 		d.noteUnknown(typ)
@@ -171,6 +190,27 @@ func (d *Display) noteUnknown(typ uint16) {
 	}
 }
 
+func (d *Display) noteImageSkip(imgType uint8, reason string) {
+	d.mu.Lock()
+	d.imageSkipTypes[imgType]++
+	n := d.imageSkipTypes[imgType]
+	d.drawSkips++
+	d.mu.Unlock()
+	if n == 1 {
+		log.Printf("channel/display: skipping unsupported image type %d: %s", imgType, reason)
+	}
+}
+
+func (d *Display) noteDrawSkip(reason string) {
+	d.mu.Lock()
+	d.drawSkips++
+	n := d.drawSkips
+	d.mu.Unlock()
+	if n == 1 || n == 10 || n == 100 {
+		log.Printf("channel/display: skipping draw/surface op (%d): %s", n, reason)
+	}
+}
+
 // UnknownCounts returns a copy of ignored-type counters (tests / diagnostics).
 func (d *Display) UnknownCounts() map[uint16]int {
 	d.mu.Lock()
@@ -180,6 +220,24 @@ func (d *Display) UnknownCounts() map[uint16]int {
 		out[k] = v
 	}
 	return out
+}
+
+// ImageSkipCounts returns soft-skipped image type → count (e.g. LZ until PR 09).
+func (d *Display) ImageSkipCounts() map[uint8]int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make(map[uint8]int, len(d.imageSkipTypes))
+	for k, v := range d.imageSkipTypes {
+		out[k] = v
+	}
+	return out
+}
+
+// DrawSkipCount returns the number of soft-skipped draw/surface operations.
+func (d *Display) DrawSkipCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.drawSkips
 }
 
 func (d *Display) handleSetAck(data []byte) error {
@@ -201,55 +259,61 @@ func (d *Display) handlePing(data []byte) error {
 	return protocol.WriteMessage(d.conn, protocol.MsgcPong, data)
 }
 
-func (d *Display) handleMode(data []byte) error {
+func (d *Display) handleMode(data []byte) {
 	// SpiceMsgDisplayMode: x, y, bits, width, height — all uint32 (legacy).
 	// Modern servers prefer SURFACE_CREATE; MODE is accepted for allowlist completeness.
 	if len(data) < 20 {
-		return fmt.Errorf("channel: DISPLAY_MODE short: %d", len(data))
+		d.noteDrawSkip(fmt.Sprintf("DISPLAY_MODE short: %d", len(data)))
+		return
 	}
-	// width := binary.LittleEndian.Uint32(data[12:16])
-	// height := binary.LittleEndian.Uint32(data[16:20])
-	// No surface allocation here without format; SURFACE_CREATE is authoritative.
-	return nil
 }
 
-func (d *Display) handleSurfaceCreate(data []byte) error {
+func (d *Display) handleSurfaceCreate(data []byte) {
 	if len(data) < protocol.SurfaceCreateSize {
-		return fmt.Errorf("channel: SURFACE_CREATE short: %d", len(data))
+		d.noteDrawSkip(fmt.Sprintf("SURFACE_CREATE short: %d", len(data)))
+		return
 	}
 	id := binary.LittleEndian.Uint32(data[0:4])
 	w := binary.LittleEndian.Uint32(data[4:8])
 	h := binary.LittleEndian.Uint32(data[8:12])
 	format := binary.LittleEndian.Uint32(data[12:16])
 	flags := binary.LittleEndian.Uint32(data[16:20])
-	return d.comp.CreateSurface(id, int(w), int(h), format, flags)
+	if err := d.comp.CreateSurface(id, int(w), int(h), format, flags); err != nil {
+		d.noteDrawSkip(err.Error())
+	}
 }
 
-func (d *Display) handleSurfaceDestroy(data []byte) error {
+func (d *Display) handleSurfaceDestroy(data []byte) {
 	if len(data) < 4 {
-		return fmt.Errorf("channel: SURFACE_DESTROY short: %d", len(data))
+		d.noteDrawSkip(fmt.Sprintf("SURFACE_DESTROY short: %d", len(data)))
+		return
 	}
 	id := binary.LittleEndian.Uint32(data[0:4])
-	return d.comp.DestroySurface(id)
+	if err := d.comp.DestroySurface(id); err != nil {
+		d.noteDrawSkip(err.Error())
+	}
 }
 
-func (d *Display) handleDrawFill(data []byte) error {
+func (d *Display) handleDrawFill(data []byte) {
 	base, off, err := decodeDisplayBase(data)
 	if err != nil {
-		return fmt.Errorf("channel: DRAW_FILL base: %w", err)
+		d.noteDrawSkip(fmt.Sprintf("DRAW_FILL base: %v", err))
+		return
 	}
 	if off >= len(data) {
-		return fmt.Errorf("channel: DRAW_FILL truncated after base")
+		d.noteDrawSkip("DRAW_FILL truncated after base")
+		return
 	}
 	brushType := data[off]
 	off++
 	var rgba [4]byte
 	switch brushType {
 	case protocol.BrushTypeNone:
-		return nil
+		return
 	case protocol.BrushTypeSolid:
 		if off+4 > len(data) {
-			return fmt.Errorf("channel: DRAW_FILL solid color short")
+			d.noteDrawSkip("DRAW_FILL solid color short")
+			return
 		}
 		// SpiceColor LE: R, G, B, A in successive bytes
 		c := binary.LittleEndian.Uint32(data[off : off+4])
@@ -262,74 +326,107 @@ func (d *Display) handleDrawFill(data []byte) error {
 		}
 		off += 4
 	case protocol.BrushTypePattern:
-		log.Printf("channel/display: DRAW_FILL pattern brush not implemented")
-		return nil
+		d.noteDrawSkip("DRAW_FILL pattern brush not implemented")
+		return
 	default:
-		return fmt.Errorf("channel: DRAW_FILL unknown brush type %d", brushType)
+		d.noteDrawSkip(fmt.Sprintf("DRAW_FILL unknown brush type %d", brushType))
+		return
 	}
 
 	// ropd u16 + QMask (1 + 8 + 4 = 13) — skip for Phase 1 solid put
 	if off+2 > len(data) {
-		return fmt.Errorf("channel: DRAW_FILL ropd short")
+		d.noteDrawSkip("DRAW_FILL ropd short")
+		return
 	}
-	// ropd := binary.LittleEndian.Uint16(data[off:off+2])
 	off += 2
 	// QMask: flags u8, pos x u32, pos y u32, image_ptr u32
 	if off+13 > len(data) {
-		return fmt.Errorf("channel: DRAW_FILL qmask short")
+		d.noteDrawSkip("DRAW_FILL qmask short")
+		return
 	}
-	// ignore mask
-	_ = off
 
-	return d.comp.Fill(base.SurfaceID, base.Box, rgba, base.Clips)
+	if err := d.comp.Fill(base.SurfaceID, base.Box, rgba, base.Clips); err != nil {
+		d.noteDrawSkip(err.Error())
+	}
 }
 
-func (d *Display) handleDrawCopy(data []byte) error {
+func (d *Display) handleDrawCopy(data []byte) {
 	base, off, err := decodeDisplayBase(data)
 	if err != nil {
-		return fmt.Errorf("channel: DRAW_COPY base: %w", err)
+		d.noteDrawSkip(fmt.Sprintf("DRAW_COPY base: %v", err))
+		return
 	}
 	if off+4 > len(data) {
-		return fmt.Errorf("channel: DRAW_COPY img ptr short")
+		d.noteDrawSkip("DRAW_COPY img ptr short")
+		return
 	}
 	imgPtr := binary.LittleEndian.Uint32(data[off : off+4])
 	off += 4
 
 	srcArea, err := decodeRect(data, off)
 	if err != nil {
-		return fmt.Errorf("channel: DRAW_COPY src_area: %w", err)
+		d.noteDrawSkip(fmt.Sprintf("DRAW_COPY src_area: %v", err))
+		return
 	}
 	off += 16
 
 	// ropd u16, scale_mode u8, QMask 13 bytes
 	if off+2+1+13 > len(data) {
-		return fmt.Errorf("channel: DRAW_COPY trailer short")
+		d.noteDrawSkip("DRAW_COPY trailer short")
+		return
 	}
-	// skip ropd, scale_mode, qmask
-	_ = off
 
-	if int(imgPtr) > len(data) {
-		return fmt.Errorf("channel: DRAW_COPY img ptr %d out of range %d", imgPtr, len(data))
+	// Issue 7: require room for at least a SpiceImage descriptor.
+	if int(imgPtr) >= len(data) || len(data)-int(imgPtr) < protocol.SpiceImageDescSize {
+		d.noteDrawSkip(fmt.Sprintf("DRAW_COPY img_ptr %d invalid for body %d", imgPtr, len(data)))
+		d.softBlackFill(base)
+		return
 	}
+
 	img, err := codec.DecodeSpiceImage(data[imgPtr:])
 	if err != nil {
-		return fmt.Errorf("channel: DRAW_COPY image: %w", err)
+		var uerr *codec.UnsupportedImageError
+		if errors.As(err, &uerr) {
+			d.noteImageSkip(uerr.Type, err.Error())
+		} else {
+			// Peek type for diagnostics when possible.
+			typ := data[imgPtr+8]
+			if errors.Is(err, codec.ErrUnsupportedImage) {
+				d.noteImageSkip(typ, err.Error())
+			} else {
+				d.noteDrawSkip(fmt.Sprintf("DRAW_COPY image: %v", err))
+			}
+		}
+		d.softBlackFill(base)
+		return
 	}
 
 	srcOrigin := image.Pt(srcArea.Min.X, srcArea.Min.Y)
 	// If src_area is empty, use full image at 0,0
 	if srcArea.Empty() {
 		srcOrigin = image.Pt(0, 0)
-		// dest size still from base.Box
 	}
-	return d.comp.Copy(base.SurfaceID, base.Box, img, srcOrigin, base.Clips)
+	if err := d.comp.Copy(base.SurfaceID, base.Box, img, srcOrigin, base.Clips); err != nil {
+		d.noteDrawSkip(err.Error())
+		d.softBlackFill(base)
+	}
+}
+
+// softBlackFill paints dest black when a COPY is skipped (design: prefer black fill).
+func (d *Display) softBlackFill(base displayBase) {
+	if base.Box.Empty() {
+		return
+	}
+	// Ignore fill errors (missing surface, bounds) — already soft path.
+	_ = d.comp.Fill(base.SurfaceID, base.Box, opaqueBlack, base.Clips)
 }
 
 // displayBase is the decoded SpiceMsgDisplayBase prefix of draw messages.
 type displayBase struct {
 	SurfaceID uint32
 	Box       image.Rectangle
-	Clips     []image.Rectangle // nil if clip_type=NONE
+	// Clips: nil = CLIP_NONE (unclipped); non-nil empty = CLIP_RECTS with 0 rects (draw nothing).
+	Clips []image.Rectangle
 }
 
 func decodeDisplayBase(data []byte) (displayBase, int, error) {
@@ -349,6 +446,7 @@ func decodeDisplayBase(data []byte) (displayBase, int, error) {
 	off++
 	switch clipType {
 	case protocol.ClipTypeNone:
+		// Clips remains nil → unclipped
 		return b, off, nil
 	case protocol.ClipTypeRects:
 		if off+4 > len(data) {
@@ -363,6 +461,7 @@ func decodeDisplayBase(data []byte) (displayBase, int, error) {
 		if need > len(data) {
 			return displayBase{}, 0, fmt.Errorf("clip rects truncated")
 		}
+		// Non-nil even when n==0: empty clip list means draw nothing.
 		b.Clips = make([]image.Rectangle, n)
 		for i := uint32(0); i < n; i++ {
 			r, err := decodeRect(data, off)

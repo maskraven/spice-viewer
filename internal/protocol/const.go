@@ -45,7 +45,14 @@ const (
 	// AuthMechanismSpice is the AuthSpice mechanism id (SPICE_COMMON_CAP_AUTH_SPICE path).
 	AuthMechanismSpice uint32 = 1
 
-	// MaxMessageBody is an upper bound for post-link message body size (DoS guard).
+	// MaxMessageBody is an upper bound for post-link message body size (DoS guard
+	// on the wire framing path). This is intentionally lower than MaxSurfaceBytes:
+	// surfaces are local buffers (up to 64 MiB each, with a compositor-wide total
+	// cap), while a single SPICE message is limited to 10 MiB so one framed packet
+	// cannot force a huge allocation. Servers tile large updates; raw frames that
+	// exceed MaxMessageBody cannot arrive on the network path even if the surface
+	// is larger. Codec bounds still allow up to MaxSurfaceBytes for injected /
+	// offline decode paths.
 	MaxMessageBody = 10 << 20 // 10 MiB
 )
 
@@ -268,10 +275,13 @@ const (
 	RopdInversRes   uint16 = 1 << 10
 )
 
-// Surface size bounds (design: max side 8192; max bytes 64 MiB).
+// Surface size bounds (design: max side 8192; max bytes 64 MiB per surface).
+// Compositor also enforces MaxSurfaces and MaxTotalSurfaceBytes across all surfaces.
 const (
-	MaxSurfaceSide  = 8192
-	MaxSurfaceBytes = 64 << 20 // 64 MiB
+	MaxSurfaceSide       = 8192
+	MaxSurfaceBytes      = 64 << 20  // 64 MiB per surface
+	MaxSurfaces          = 32        // max concurrent surfaces in one compositor
+	MaxTotalSurfaceBytes = 128 << 20 // 128 MiB total pixel memory across surfaces
 )
 
 // SpiceImageDescSize is sizeof(SpiceImageDescriptor): id u64 + type u8 + flags u8 + w u32 + h u32.
