@@ -148,6 +148,13 @@ func TestCursorDecodeErrorNoPanic(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
+	if ch.LastError() == nil {
+		t.Fatal("LastError should be set by HandleMessage")
+	}
+	// Decode failure degrades to hide
+	if _, _, hide, _ := drv.Counts(); hide < 1 {
+		t.Fatal("expected HideCursor on SET decode error")
+	}
 	// Truncated ALPHA data
 	body := encodeCursorSet(0, 0, true, 9, protocol.CursorTypeAlpha, 4, 4, 0, 0, []byte{1, 2, 3})
 	err = ch.HandleMessage(protocol.MsgCursorSet, body)
@@ -176,6 +183,66 @@ func TestCursorDecodeErrorNoPanic(t *testing.T) {
 	}
 	if set, _, _, _ := drv.Counts(); set < 1 {
 		t.Fatal("expected successful set after errors")
+	}
+}
+
+func TestCursorInitPrefixAndTrail(t *testing.T) {
+	drv := channel.NewNullDriver()
+	ch := channel.NewCursor(nil, drv)
+
+	// Seed cache then INIT must clear it (SPICE semantics).
+	seed := encodeCursorSetFlags(0, 0, true, protocol.CursorFlagCacheMe, 0x42,
+		protocol.CursorTypeAlpha, 1, 1, 0, 0, []byte{0, 0, 0xff, 0xff})
+	if err := ch.HandleMessage(protocol.MsgCursorSet, seed); err != nil {
+		t.Fatal(err)
+	}
+
+	// INIT: x=7 y=8 trail_len=3 trail_freq=50 visible=1 + ALPHA 1x1
+	body := make([]byte, 0, 9+2+17+4)
+	var prefix [9]byte
+	binary.LittleEndian.PutUint16(prefix[0:2], 7)
+	binary.LittleEndian.PutUint16(prefix[2:4], 8)
+	binary.LittleEndian.PutUint16(prefix[4:6], 3)  // trail length (ignored)
+	binary.LittleEndian.PutUint16(prefix[6:8], 50) // trail frequency (ignored)
+	prefix[8] = 1
+	body = append(body, prefix[:]...)
+	// Cursor: flags=0 + header + BGRA red
+	body = append(body, 0, 0) // flags
+	var hdr [17]byte
+	binary.LittleEndian.PutUint64(hdr[0:8], 99)
+	hdr[8] = protocol.CursorTypeAlpha
+	binary.LittleEndian.PutUint16(hdr[9:11], 1)
+	binary.LittleEndian.PutUint16(hdr[11:13], 1)
+	body = append(body, hdr[:]...)
+	body = append(body, 0x00, 0x00, 0xff, 0xff)
+
+	if err := ch.HandleMessage(protocol.MsgCursorInit, body); err != nil {
+		t.Fatalf("INIT: %v", err)
+	}
+	rgba, w, h, _, _, x, y, vis := drv.Snapshot()
+	if w != 1 || h != 1 || x != 7 || y != 8 || !vis {
+		t.Fatalf("init state w=%d h=%d pos=%d,%d vis=%v", w, h, x, y, vis)
+	}
+	if rgba[0] != 0xff || rgba[2] != 0x00 {
+		t.Fatalf("init rgba %v", rgba)
+	}
+
+	// FROM_CACHE of pre-INIT unique must miss (cache cleared)
+	miss := encodeCursorSetFlags(0, 0, true, protocol.CursorFlagFromCache, 0x42,
+		protocol.CursorTypeAlpha, 0, 0, 0, 0, nil)
+	if err := ch.HandleMessage(protocol.MsgCursorSet, miss); err == nil {
+		t.Fatal("expected cache miss after INIT clear")
+	}
+
+	// INIT with visible=0 hides after set
+	prefix[8] = 0
+	body2 := append(prefix[:], body[9:]...)
+	if err := ch.HandleMessage(protocol.MsgCursorInit, body2); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _, _, _, _, vis = drv.Snapshot()
+	if vis {
+		t.Fatal("INIT visible=0 should hide")
 	}
 }
 

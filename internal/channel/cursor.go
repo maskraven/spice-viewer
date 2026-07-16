@@ -24,6 +24,8 @@ import (
 // session continues (server-drawn cursor in the framebuffer is sufficient).
 type Driver interface {
 	// SetCursor installs a client-side cursor shape (RGBA8888, stride = w*4).
+	// The rgba slice must be treated as immutable after return (callers may
+	// retain a reference; copy if mutation is required).
 	SetCursor(hotX, hotY int, rgba []byte, w, h int)
 	// MoveCursor moves the hotspot to guest display coordinates (server mouse mode).
 	MoveCursor(x, y int)
@@ -32,6 +34,9 @@ type Driver interface {
 	// ResetCursor restores the default / ungrabbbed cursor and clears shape state.
 	ResetCursor()
 }
+
+// maxCursorCacheEntries bounds CACHE_ME entries against a chatty/hostile server.
+const maxCursorCacheEntries = 64
 
 // NullDriver is a headless Driver for tests. Methods are concurrency-safe.
 type NullDriver struct {
@@ -156,6 +161,7 @@ func NewCursor(conn net.Conn, driver Driver) *Cursor {
 }
 
 // LastError returns the most recent non-fatal handle error, if any.
+// Updated by HandleMessage (including the path used by Run).
 func (c *Cursor) LastError() error {
 	if c == nil {
 		return nil
@@ -169,17 +175,20 @@ func (c *Cursor) LastError() error {
 //
 // Decode errors are logged and do not stop the loop (best-effort). I/O errors
 // and context cancel stop Run; the caller must treat that as cursor degrade
-// only — never as a session-fatal condition.
+// only — never as a session-fatal condition. On channel death the driver is
+// reset so a stale client cursor is not left on screen.
 func (c *Cursor) Run(ctx context.Context) error {
 	if c == nil || c.conn == nil {
 		return fmt.Errorf("channel: cursor: nil conn")
 	}
 	for {
 		if err := ctx.Err(); err != nil {
+			c.degradeDriver()
 			return err
 		}
 		msg, err := protocol.ReadMessage(c.conn)
 		if err != nil {
+			c.degradeDriver()
 			if err == io.EOF || isClosedConn(err) {
 				return err
 			}
@@ -192,24 +201,29 @@ func (c *Cursor) Run(ctx context.Context) error {
 		}
 		if err := c.HandleMessage(msg.Type, msg.Data); err != nil {
 			// Non-fatal: keep reading so one bad shape cannot kill the channel loop.
+			// lastErr already set inside HandleMessage.
 			log.Printf("channel/cursor: handle type %d: %v", msg.Type, err)
-			c.mu.Lock()
-			c.lastErr = err
-			c.mu.Unlock()
 		}
 	}
 }
 
 // HandleMessage dispatches one server→client cursor message by type.
 //
-// Decode failures return an error for the caller to log; they never panic.
-// Unknown / unsupported types are ignored (nil error).
+// Decode failures return an error for the caller to log and record in
+// LastError; they never panic. On shape decode failure for SET/INIT the
+// driver is hidden (degrade to server-drawn / default). Unknown types are
+// ignored (nil error).
 func (c *Cursor) HandleMessage(typ uint16, data []byte) (err error) {
 	// Panic guard: best-effort must never take down the process.
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("channel: cursor: panic recovered: %v", r)
 			log.Printf("%v", err)
+		}
+		if err != nil {
+			c.mu.Lock()
+			c.lastErr = err
+			c.mu.Unlock()
 		}
 	}()
 
@@ -311,16 +325,19 @@ func (c *Cursor) handleReset() error {
 func (c *Cursor) handleInit(data []byte) error {
 	// SpiceMsgCursorInit: Point16 + trail_length u16 + trail_frequency u16 + visible u8 + Cursor
 	// Fixed prefix = 9 bytes (packed).
+	// SPICE: INIT clears shape cache then applies pointer state.
 	if len(data) < 9 {
 		return fmt.Errorf("channel: CURSOR_INIT short: %d", len(data))
 	}
 	c.clearCache()
 	x := int(int16(binary.LittleEndian.Uint16(data[0:2])))
 	y := int(int16(binary.LittleEndian.Uint16(data[2:4])))
-	// trail_length / trail_frequency ignored
+	// trail_length / trail_frequency ignored (bytes 4..7)
 	visible := data[8] != 0
 	shape, err := c.decodeCursor(data[9:])
 	if err != nil {
+		// Degrade: hide client cursor; server-drawn path remains.
+		c.hide()
 		return fmt.Errorf("channel: CURSOR_INIT: %w", err)
 	}
 	if shape != nil && c.driver != nil {
@@ -345,6 +362,8 @@ func (c *Cursor) handleSet(data []byte) error {
 	visible := data[4] != 0
 	shape, err := c.decodeCursor(data[5:])
 	if err != nil {
+		// Degrade on bad shape: hide rather than keep a possibly stale client cursor.
+		c.hide()
 		return fmt.Errorf("channel: CURSOR_SET: %w", err)
 	}
 	if shape != nil && c.driver != nil {
@@ -390,10 +409,34 @@ func (c *Cursor) hide() {
 	}
 }
 
+// degradeDriver hides/resets client cursor state when the channel dies or
+// cannot be trusted (design: runtime failure → hide / use default).
+func (c *Cursor) degradeDriver() {
+	if c.driver != nil {
+		c.driver.ResetCursor()
+	}
+}
+
 func (c *Cursor) clearCache() {
 	c.mu.Lock()
 	c.cache = make(map[uint64]cachedShape)
 	c.mu.Unlock()
+}
+
+// storeCache inserts a CACHE_ME entry, evicting an arbitrary entry if full.
+func (c *Cursor) storeCache(id uint64, shape cachedShape) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.cache) >= maxCursorCacheEntries {
+		if _, ok := c.cache[id]; !ok {
+			// Evict one arbitrary entry (map iteration order is fine for a bound).
+			for k := range c.cache {
+				delete(c.cache, k)
+				break
+			}
+		}
+	}
+	c.cache[id] = shape
 }
 
 // decodeCursor parses a SpiceCursor blob (flags16 + optional header + data).
@@ -440,6 +483,9 @@ func (c *Cursor) decodeCursor(b []byte) (*cachedShape, error) {
 	if width <= 0 || height <= 0 || width > protocol.MaxCursorSide || height > protocol.MaxCursorSide {
 		return nil, fmt.Errorf("cursor size %dx%d out of range", width, height)
 	}
+	if width*height > protocol.MaxCursorPixels {
+		return nil, fmt.Errorf("cursor pixels %d exceeds max %d", width*height, protocol.MaxCursorPixels)
+	}
 	if hotX > width {
 		hotX = width
 	}
@@ -453,12 +499,10 @@ func (c *Cursor) decodeCursor(b []byte) (*cachedShape, error) {
 	}
 	shape := &cachedShape{hotX: hotX, hotY: hotY, w: width, h: height, rgba: rgba}
 	if flags&protocol.CursorFlagCacheMe != 0 {
-		c.mu.Lock()
-		c.cache[unique] = cachedShape{
+		c.storeCache(unique, cachedShape{
 			hotX: hotX, hotY: hotY, w: width, h: height,
 			rgba: append([]byte(nil), rgba...),
-		}
-		c.mu.Unlock()
+		})
 	}
 	return shape, nil
 }
@@ -470,8 +514,11 @@ func (c *Cursor) lookupCache(id uint64) (*cachedShape, error) {
 	if !ok {
 		return nil, fmt.Errorf("cursor cache miss id=%#x", id)
 	}
-	// Return a shallow copy of metadata; rgba shared read-only after insert.
-	out := s
+	// Copy pixels so a Driver that mutates cannot corrupt the cache.
+	out := cachedShape{
+		hotX: s.hotX, hotY: s.hotY, w: s.w, h: s.h,
+		rgba: append([]byte(nil), s.rgba...),
+	}
 	return &out, nil
 }
 
