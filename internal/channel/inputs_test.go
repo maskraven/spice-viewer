@@ -68,6 +68,32 @@ func TestInputs_KeyDown_ExtendedScancode(t *testing.T) {
 	if msg.Data[0] != 0xe0 || msg.Data[1] != 0x1d {
 		t.Fatalf("bytes %v", msg.Data)
 	}
+
+	// Extended KeyUp (RCtrl, Delete).
+	if err := in.KeyUp(channel.ScanRCtrl); err != nil {
+		t.Fatal(err)
+	}
+	up := readMsg(t, &buf)
+	if up.Type != protocol.MsgcInputsKeyUp {
+		t.Fatalf("type=%d", up.Type)
+	}
+	code, err = protocol.DecodeKeyCode(up.Data)
+	if err != nil || code != 0x9de0 {
+		t.Fatalf("RCtrl up=%#x err=%v", code, err)
+	}
+	if up.Data[0] != 0xe0 || up.Data[1] != 0x9d {
+		t.Fatalf("RCtrl up bytes %v", up.Data)
+	}
+
+	if err := in.KeyUp(channel.ScanDelete); err != nil {
+		t.Fatal(err)
+	}
+	delUp := readMsg(t, &buf)
+	code, err = protocol.DecodeKeyCode(delUp.Data)
+	// Delete make 0x153 → break e0 0xd3 → LE 0xd3e0
+	if err != nil || code != 0xd3e0 {
+		t.Fatalf("Delete up=%#x err=%v", code, err)
+	}
 }
 
 func TestInputs_MouseMove_ServerMode_Relative(t *testing.T) {
@@ -259,32 +285,250 @@ func TestInputs_RequestPreferredMouseMode(t *testing.T) {
 	}
 }
 
-func TestInputs_MotionFloodDrop(t *testing.T) {
+func TestInputs_RequestPreferredMouseMode_EmptySupported(t *testing.T) {
+	var mainBuf bytes.Buffer
+	in := channel.NewInputs(&bytes.Buffer{}, 0)
+	// No SetMouseMode — supported mask is 0.
+	want, err := in.RequestPreferredMouseMode(&mainBuf)
+	if err == nil || want != 0 {
+		t.Fatalf("want error and 0, got want=%d err=%v", want, err)
+	}
+	if mainBuf.Len() != 0 {
+		t.Fatalf("must not write on empty supported mask, got %d bytes", mainBuf.Len())
+	}
+}
+
+func TestInputs_MotionFlood_CoalesceAndACKFlush_Server(t *testing.T) {
 	var buf bytes.Buffer
 	in := channel.NewInputs(&buf, 0)
 	in.SetMouseMode(protocol.MouseModeServer, protocol.MouseModeServer)
 
-	// Fill to 2 * ACK_BUNCH without acks; further moves should drop silently.
 	limit := protocol.InputMotionAckBunch * 2
+	// Send limit distinct motions (each flushed immediately while under budget).
 	for i := 0; i < limit; i++ {
 		if err := in.MouseMove(1, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := in.MouseMove(1, 0); err != nil {
+	// Over limit: deltas coalesce into pending (no new wire message yet).
+	if err := in.MouseMove(3, 4); err != nil {
 		t.Fatal(err)
 	}
-	// Count messages: only `limit` should have been written.
+	if err := in.MouseMove(7, -1); err != nil {
+		t.Fatal(err)
+	}
+	// Zero relative must not consume budget or write.
+	if err := in.MouseMove(0, 0); err != nil {
+		t.Fatal(err)
+	}
+
 	n := 0
 	for buf.Len() > 0 {
-		_, err := protocol.ReadMessage(&buf)
-		if err != nil {
+		if _, err := protocol.ReadMessage(&buf); err != nil {
 			t.Fatal(err)
 		}
 		n++
 	}
 	if n != limit {
-		t.Fatalf("msgs=%d want %d (flood dropped)", n, limit)
+		t.Fatalf("msgs before ACK=%d want %d", n, limit)
+	}
+
+	// ACK frees bunch slots and flushes one coalesced motion (dx=3+7, dy=4-1).
+	if err := in.HandleMessage(protocol.Message{Type: protocol.MsgInputsMouseMotionAck}); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("expected catch-up motion after ACK")
+	}
+	msg := readMsg(t, &buf)
+	if msg.Type != protocol.MsgcInputsMouseMotion {
+		t.Fatalf("type=%d", msg.Type)
+	}
+	m, err := protocol.DecodeMouseMotion(msg.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.DX != 10 || m.DY != 3 {
+		t.Fatalf("coalesced motion got %+v want dx=10 dy=3", m)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("extra bytes after catch-up: %d", buf.Len())
+	}
+
+	// Further moves are accepted again (budget recovered).
+	if err := in.MouseMove(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	msg = readMsg(t, &buf)
+	m, err = protocol.DecodeMouseMotion(msg.Data)
+	if err != nil || m.DX != 1 || m.DY != 1 {
+		t.Fatalf("post-recovery motion %+v err=%v", m, err)
+	}
+}
+
+func TestInputs_MotionFlood_CoalesceAndACKFlush_Client(t *testing.T) {
+	var buf bytes.Buffer
+	in := channel.NewInputs(&buf, 1)
+	in.SetMouseMode(protocol.MouseModeClient, protocol.MouseModeClient)
+
+	limit := protocol.InputMotionAckBunch * 2
+	for i := 0; i < limit; i++ {
+		if err := in.MouseMove(int32(i), int32(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Over limit: keep latest absolute only.
+	if err := in.MouseMove(999, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.MouseMove(42, 43); err != nil {
+		t.Fatal(err)
+	}
+
+	n := 0
+	for buf.Len() > 0 {
+		if _, err := protocol.ReadMessage(&buf); err != nil {
+			t.Fatal(err)
+		}
+		n++
+	}
+	if n != limit {
+		t.Fatalf("msgs before ACK=%d want %d", n, limit)
+	}
+
+	if err := in.HandleMessage(protocol.Message{Type: protocol.MsgInputsMouseMotionAck}); err != nil {
+		t.Fatal(err)
+	}
+	msg := readMsg(t, &buf)
+	if msg.Type != protocol.MsgcInputsMousePosition {
+		t.Fatalf("type=%d", msg.Type)
+	}
+	p, err := protocol.DecodeMousePosition(msg.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.X != 42 || p.Y != 43 || p.DisplayID != 1 {
+		t.Fatalf("catch-up position %+v", p)
+	}
+}
+
+func TestInputs_ZeroRelativeMotion_NoWrite(t *testing.T) {
+	var buf bytes.Buffer
+	in := channel.NewInputs(&buf, 0)
+	in.SetMouseMode(protocol.MouseModeServer, protocol.MouseModeServer)
+	if err := in.MouseMotion(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.MouseMove(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("zero relative must not write, got %d bytes", buf.Len())
+	}
+}
+
+func TestInputs_ConcurrentKeyAndMouse_Framing(t *testing.T) {
+	var buf bytes.Buffer
+	in := channel.NewInputs(&buf, 0)
+	in.SetMouseMode(protocol.MouseModeServer, protocol.MouseModeServer)
+
+	const nKey = 50
+	const nMouse = 50
+	done := make(chan error, 2)
+	go func() {
+		for i := 0; i < nKey; i++ {
+			if err := in.KeyDown(channel.ScanA); err != nil {
+				done <- err
+				return
+			}
+			if err := in.KeyUp(channel.ScanA); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	go func() {
+		for i := 0; i < nMouse; i++ {
+			if err := in.MouseMove(1, 0); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	for i := 0; i < 2; i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Demux complete mini-header messages; total should be 2*nKey keys + some motions
+	// (motions may coalesce under flood — at least keys must all be intact).
+	var keys, motions int
+	for buf.Len() > 0 {
+		msg, err := protocol.ReadMessage(&buf)
+		if err != nil {
+			t.Fatalf("framed demux failed (interleaved write?): %v remaining=%d", err, buf.Len())
+		}
+		switch msg.Type {
+		case protocol.MsgcInputsKeyDown, protocol.MsgcInputsKeyUp:
+			keys++
+			if _, err := protocol.DecodeKeyCode(msg.Data); err != nil {
+				t.Fatal(err)
+			}
+		case protocol.MsgcInputsMouseMotion:
+			motions++
+			if _, err := protocol.DecodeMouseMotion(msg.Data); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("unexpected type %d", msg.Type)
+		}
+	}
+	if keys != 2*nKey {
+		t.Fatalf("keys=%d want %d", keys, 2*nKey)
+	}
+	if motions == 0 {
+		t.Fatal("expected some motion messages")
+	}
+}
+
+func TestInputs_MainInitMouseBits_ConsistentWithFlags16(t *testing.T) {
+	// MAIN_INIT carries mouse modes as uint32; MAIN_MOUSE_MODE uses flags16.
+	// PreferMouseMode / request path must treat the same bit values.
+	init := protocol.MainInit{
+		SessionID:           1,
+		SupportedMouseModes: protocol.MouseModeServer | protocol.MouseModeClient,
+		CurrentMouseMode:    protocol.MouseModeServer,
+	}
+	var mainBuf, inBuf bytes.Buffer
+	in := channel.NewInputs(&inBuf, 0)
+	in.SetMouseMode(init.SupportedMouseModes, init.CurrentMouseMode)
+
+	want, err := in.RequestPreferredMouseMode(&mainBuf)
+	if err != nil || want != protocol.MouseModeClient {
+		t.Fatalf("want=%d err=%v", want, err)
+	}
+	msg := readMsg(t, &mainBuf)
+	mode, err := protocol.DecodeMouseModeRequest(msg.Data)
+	if err != nil || uint32(mode) != protocol.MouseModeClient {
+		t.Fatalf("mode=%d err=%v", mode, err)
+	}
+
+	// Server grants CLIENT via flags16 MAIN_MOUSE_MODE body.
+	mm := protocol.MainMouseMode{
+		Supported: uint16(init.SupportedMouseModes),
+		Current:   uint16(protocol.MouseModeClient),
+	}
+	if err := in.HandleMainMouseMode(protocol.Message{
+		Type: protocol.MsgMainMouseMode,
+		Data: mm.Encode(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if in.MouseMode() != protocol.MouseModeClient {
+		t.Fatalf("mode=%d", in.MouseMode())
 	}
 }
 

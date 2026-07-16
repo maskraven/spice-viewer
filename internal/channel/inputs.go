@@ -18,13 +18,16 @@ import (
 // UI layers call KeyDown/KeyUp, MouseMove, and MouseButton; the session layer
 // feeds server messages via HandleMessage and mouse-mode updates via SetMouseMode.
 //
-// Inputs is safe for concurrent use.
+// Inputs is safe for concurrent use: all state updates and writes to the
+// inputs writer are serialized under an internal mutex (mini-header framing
+// cannot interleave).
 //
 // Wire encoding follows spice-protocol (spice.proto InputsChannel) and does not
 // require QEMU for unit tests — pass any io.Writer (e.g. bytes.Buffer).
 //
-// Optional integration against a live QEMU SPICE server can be exercised under a
-// separate build tag in later PRs; this package stays pure unit-testable.
+// QEMU typing smoke / live SPICE integration is deferred to a later PR
+// (//go:build integration or session/UI smoke). This package remains pure
+// unit-testable without a guest.
 type Inputs struct {
 	mu sync.Mutex
 
@@ -41,6 +44,15 @@ type Inputs struct {
 	// motionCount tracks unacked motion/position messages for flood control
 	// (server sends MOTION_ACK every InputMotionAckBunch messages).
 	motionCount int
+
+	// Pending relative motion (SERVER mode), spice-gtk style coalesce.
+	pendingDX int32
+	pendingDY int32
+
+	// Pending absolute position (CLIENT mode); havePendingPos means "dirty".
+	pendingX       uint32
+	pendingY       uint32
+	havePendingPos bool
 }
 
 // NewInputs builds an Inputs helper writing mini-header framed messages to w.
@@ -132,11 +144,17 @@ func (in *Inputs) Buttons() uint16 {
 // RequestPreferredMouseMode writes SPICE_MSGC_MAIN_MOUSE_MODE_REQUEST on mainW
 // preferring CLIENT when supported. Returns the requested mode (0 if none).
 //
+// Callers must SetMouseMode first (from MAIN_INIT). If supported is empty,
+// returns (0, error) and does not write.
+//
 // The active mode only changes when the server answers with MAIN_MOUSE_MODE
 // (or MAIN_INIT); call SetMouseMode when that arrives.
 func (in *Inputs) RequestPreferredMouseMode(mainW io.Writer) (uint32, error) {
 	if in == nil {
 		return 0, fmt.Errorf("channel: nil Inputs")
+	}
+	if mainW == nil {
+		return 0, fmt.Errorf("channel: nil main writer")
 	}
 	in.mu.Lock()
 	supported := in.supported
@@ -144,13 +162,10 @@ func (in *Inputs) RequestPreferredMouseMode(mainW io.Writer) (uint32, error) {
 
 	want := protocol.PreferMouseMode(supported)
 	if want == 0 {
-		// Fall back to CLIENT request even without a prior mask (server may accept).
-		want = protocol.MouseModeClient
-	}
-	if mainW == nil {
-		return 0, fmt.Errorf("channel: nil main writer")
+		return 0, fmt.Errorf("channel: no supported mouse modes (call SetMouseMode first)")
 	}
 	body := protocol.EncodeMouseModeRequest(uint16(want))
+	// mainW is a separate connection; serialize only via caller's use of main.
 	if err := protocol.WriteMessage(mainW, protocol.MsgcMainMouseModeRequest, body); err != nil {
 		return 0, err
 	}
@@ -159,6 +174,9 @@ func (in *Inputs) RequestPreferredMouseMode(mainW io.Writer) (uint32, error) {
 
 // HandleMessage processes a server→client inputs-channel message.
 // Unknown types are ignored (Phase 1).
+//
+// On MOTION_ACK, decrements the unacked motion budget and flushes any pending
+// coalesced relative motion and/or absolute position (spice-gtk behavior).
 func (in *Inputs) HandleMessage(msg protocol.Message) error {
 	if in == nil {
 		return fmt.Errorf("channel: nil Inputs")
@@ -176,12 +194,16 @@ func (in *Inputs) HandleMessage(msg protocol.Message) error {
 
 	case protocol.MsgInputsMouseMotionAck:
 		in.mu.Lock()
+		defer in.mu.Unlock()
 		in.motionCount -= protocol.InputMotionAckBunch
 		if in.motionCount < 0 {
 			in.motionCount = 0
 		}
-		in.mu.Unlock()
-		return nil
+		// Flush pending relative then absolute (spice-gtk inputs_handle_ack).
+		if err := in.flushMotionLocked(); err != nil {
+			return err
+		}
+		return in.flushPositionLocked()
 
 	default:
 		return nil
@@ -219,49 +241,35 @@ func (in *Inputs) sendKey(scancode uint16, release bool) error {
 		return fmt.Errorf("channel: nil Inputs")
 	}
 	code := protocol.MakeScancodeCode(scancode, release)
-	body := protocol.EncodeKeyDown(code)
 	typ := protocol.MsgcInputsKeyDown
+	body := protocol.EncodeKeyDown(code)
 	if release {
 		typ = protocol.MsgcInputsKeyUp
 		body = protocol.EncodeKeyUp(code)
 	}
 	in.mu.Lock()
-	w := in.w
-	in.mu.Unlock()
-	if w == nil {
-		return fmt.Errorf("channel: inputs writer is nil")
-	}
-	return protocol.WriteMessage(w, typ, body)
+	defer in.mu.Unlock()
+	return in.writeMsgLocked(typ, body)
 }
 
 // MouseMove injects mouse movement according to the current mouse mode:
 //   - CLIENT mode: x,y are absolute desktop coordinates (uint32 range)
-//   - SERVER mode: x,y are relative deltas (int32)
+//   - SERVER mode: x,y are relative deltas (int32); zero deltas are ignored
 //
 // Negative absolute coordinates are clamped to 0 in CLIENT mode.
+//
+// Flood control matches spice-gtk: at most InputMotionAckBunch*2 unacked
+// motion/position messages. Excess samples are coalesced (relative deltas
+// summed; absolute keeps the latest position) and flushed on MOTION_ACK.
 func (in *Inputs) MouseMove(x, y int32) error {
 	if in == nil {
 		return fmt.Errorf("channel: nil Inputs")
 	}
 	in.mu.Lock()
-	mode := in.mode
-	buttons := in.buttons
-	displayID := in.displayID
-	// Drop motion if too many unacked (same policy as spice-gtk: 2× bunch).
-	if in.motionCount >= protocol.InputMotionAckBunch*2 {
-		in.mu.Unlock()
-		return nil
-	}
-	in.motionCount++
-	w := in.w
-	in.mu.Unlock()
-
-	if w == nil {
-		return fmt.Errorf("channel: inputs writer is nil")
-	}
+	defer in.mu.Unlock()
 
 	// current_mouse_mode is a single mode value (SERVER=1 or CLIENT=2), not a mask.
-	if mode == protocol.MouseModeClient {
+	if in.mode == protocol.MouseModeClient {
 		ax, ay := x, y
 		if ax < 0 {
 			ax = 0
@@ -269,67 +277,50 @@ func (in *Inputs) MouseMove(x, y int32) error {
 		if ay < 0 {
 			ay = 0
 		}
-		body := protocol.MousePosition{
-			X:            uint32(ax),
-			Y:            uint32(ay),
-			ButtonsState: buttons,
-			DisplayID:    displayID,
-		}.Encode()
-		return protocol.WriteMessage(w, protocol.MsgcInputsMousePosition, body)
+		in.pendingX = uint32(ax)
+		in.pendingY = uint32(ay)
+		in.havePendingPos = true
+		return in.flushPositionLocked()
 	}
 
-	body := protocol.MouseMotion{
-		DX:           x,
-		DY:           y,
-		ButtonsState: buttons,
-	}.Encode()
-	return protocol.WriteMessage(w, protocol.MsgcInputsMouseMotion, body)
+	// SERVER (default): relative motion; skip no-ops (spice-gtk).
+	if x == 0 && y == 0 {
+		return nil
+	}
+	in.pendingDX += x
+	in.pendingDY += y
+	return in.flushMotionLocked()
 }
 
 // MousePosition sends an absolute position (CLIENT mode message) regardless of
 // the current mode. Prefer MouseMove for mode-aware injection.
+// Coalesces when over the motion flood limit; flushed on MOTION_ACK.
 func (in *Inputs) MousePosition(x, y uint32) error {
 	if in == nil {
 		return fmt.Errorf("channel: nil Inputs")
 	}
 	in.mu.Lock()
-	buttons := in.buttons
-	displayID := in.displayID
-	if in.motionCount >= protocol.InputMotionAckBunch*2 {
-		in.mu.Unlock()
-		return nil
-	}
-	in.motionCount++
-	w := in.w
-	in.mu.Unlock()
-	if w == nil {
-		return fmt.Errorf("channel: inputs writer is nil")
-	}
-	body := protocol.MousePosition{
-		X: x, Y: y, ButtonsState: buttons, DisplayID: displayID,
-	}.Encode()
-	return protocol.WriteMessage(w, protocol.MsgcInputsMousePosition, body)
+	defer in.mu.Unlock()
+	in.pendingX = x
+	in.pendingY = y
+	in.havePendingPos = true
+	return in.flushPositionLocked()
 }
 
 // MouseMotion sends a relative motion (SERVER mode message) regardless of mode.
+// Zero deltas are ignored. Coalesces when over the flood limit.
 func (in *Inputs) MouseMotion(dx, dy int32) error {
 	if in == nil {
 		return fmt.Errorf("channel: nil Inputs")
 	}
-	in.mu.Lock()
-	buttons := in.buttons
-	if in.motionCount >= protocol.InputMotionAckBunch*2 {
-		in.mu.Unlock()
+	if dx == 0 && dy == 0 {
 		return nil
 	}
-	in.motionCount++
-	w := in.w
-	in.mu.Unlock()
-	if w == nil {
-		return fmt.Errorf("channel: inputs writer is nil")
-	}
-	body := protocol.MouseMotion{DX: dx, DY: dy, ButtonsState: buttons}.Encode()
-	return protocol.WriteMessage(w, protocol.MsgcInputsMouseMotion, body)
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.pendingDX += dx
+	in.pendingDY += dy
+	return in.flushMotionLocked()
 }
 
 // MouseButton injects a button press (pressed=true) or release (pressed=false).
@@ -342,24 +333,18 @@ func (in *Inputs) MouseButton(button uint8, pressed bool) error {
 	mask := protocol.ButtonMaskFor(button)
 
 	in.mu.Lock()
+	defer in.mu.Unlock()
 	if pressed {
 		in.buttons |= mask
 	} else {
 		in.buttons &^= mask
 	}
-	buttons := in.buttons
-	w := in.w
-	in.mu.Unlock()
-
-	if w == nil {
-		return fmt.Errorf("channel: inputs writer is nil")
-	}
-	body := protocol.MouseButtonEvent{Button: button, ButtonsState: buttons}.Encode()
+	body := protocol.MouseButtonEvent{Button: button, ButtonsState: in.buttons}.Encode()
 	typ := protocol.MsgcInputsMousePress
 	if !pressed {
 		typ = protocol.MsgcInputsMouseRelease
 	}
-	return protocol.WriteMessage(w, typ, body)
+	return in.writeMsgLocked(typ, body)
 }
 
 // MouseWheel sends a single wheel click (press+release of UP or DOWN button).
@@ -391,10 +376,62 @@ func (in *Inputs) SendKeyModifiers(modifiers uint16) error {
 		return fmt.Errorf("channel: nil Inputs")
 	}
 	in.mu.Lock()
-	w := in.w
-	in.mu.Unlock()
-	if w == nil {
+	defer in.mu.Unlock()
+	return in.writeMsgLocked(protocol.MsgcInputsKeyModifiers, protocol.EncodeKeyModifiers(modifiers))
+}
+
+// writeMsgLocked writes a mini-header framed message. Caller must hold in.mu.
+func (in *Inputs) writeMsgLocked(typ uint16, body []byte) error {
+	if in.w == nil {
 		return fmt.Errorf("channel: inputs writer is nil")
 	}
-	return protocol.WriteMessage(w, protocol.MsgcInputsKeyModifiers, protocol.EncodeKeyModifiers(modifiers))
+	return protocol.WriteMessage(in.w, typ, body)
+}
+
+// flushMotionLocked sends pending relative motion if under the flood limit.
+// Caller must hold in.mu. Matches spice-gtk mouse_motion().
+func (in *Inputs) flushMotionLocked() error {
+	if in.pendingDX == 0 && in.pendingDY == 0 {
+		return nil
+	}
+	if in.motionCount >= protocol.InputMotionAckBunch*2 {
+		// Keep pending deltas for MOTION_ACK flush.
+		return nil
+	}
+	body := protocol.MouseMotion{
+		DX:           in.pendingDX,
+		DY:           in.pendingDY,
+		ButtonsState: in.buttons,
+	}.Encode()
+	if err := in.writeMsgLocked(protocol.MsgcInputsMouseMotion, body); err != nil {
+		return err
+	}
+	in.motionCount++
+	in.pendingDX = 0
+	in.pendingDY = 0
+	return nil
+}
+
+// flushPositionLocked sends pending absolute position if under the flood limit.
+// Caller must hold in.mu. Matches spice-gtk mouse_position().
+func (in *Inputs) flushPositionLocked() error {
+	if !in.havePendingPos {
+		return nil
+	}
+	if in.motionCount >= protocol.InputMotionAckBunch*2 {
+		// Keep latest absolute sample for MOTION_ACK flush.
+		return nil
+	}
+	body := protocol.MousePosition{
+		X:            in.pendingX,
+		Y:            in.pendingY,
+		ButtonsState: in.buttons,
+		DisplayID:    in.displayID,
+	}.Encode()
+	if err := in.writeMsgLocked(protocol.MsgcInputsMousePosition, body); err != nil {
+		return err
+	}
+	in.motionCount++
+	in.havePendingPos = false
+	return nil
 }

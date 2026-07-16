@@ -192,6 +192,34 @@ func TestDecodeShortBodies(t *testing.T) {
 	if _, err := protocol.DecodeMainMouseMode([]byte{1}); err == nil {
 		t.Fatal("expected short mouse mode error")
 	}
+	if _, err := protocol.DecodeKeyModifiers([]byte{1}); err == nil {
+		t.Fatal("expected short key modifiers error")
+	}
+	if _, err := protocol.DecodeMouseModeRequest([]byte{1}); err == nil {
+		t.Fatal("expected short mouse mode request error")
+	}
+}
+
+func TestWireBodySizes(t *testing.T) {
+	cases := []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"KeyCode", len(protocol.EncodeKeyDown(0x1e)), protocol.KeyCodeSize},
+		{"KeyUp", len(protocol.EncodeKeyUp(0x9e)), protocol.KeyCodeSize},
+		{"KeyModifiers", len(protocol.EncodeKeyModifiers(protocol.CapsLockModifier)), protocol.KeyModifiersSize},
+		{"MouseMotion", len(protocol.MouseMotion{DX: 1, DY: -1}.Encode()), protocol.MouseMotionSize},
+		{"MousePosition", len(protocol.MousePosition{X: 1, Y: 2, DisplayID: 0}.Encode()), protocol.MousePositionSize},
+		{"MouseButton", len(protocol.MouseButtonEvent{Button: 1}.Encode()), protocol.MouseButtonEventSize},
+		{"MainMouseMode", len(protocol.MainMouseMode{Supported: 3, Current: 2}.Encode()), protocol.MainMouseModeSize},
+		{"MouseModeRequest", len(protocol.EncodeMouseModeRequest(2)), protocol.MainMouseModeReqSize},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s len=%d want %d", tc.name, tc.got, tc.want)
+		}
+	}
 }
 
 func TestButtonMaskFor(t *testing.T) {
