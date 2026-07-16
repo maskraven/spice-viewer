@@ -63,7 +63,7 @@ func (d *DefaultDialer) DialSPICE(ctx context.Context, ep Endpoint) (net.Conn, e
 	tc := tls.Client(raw, tlsCfg)
 	if err := tc.HandshakeContext(ctx); err != nil {
 		_ = tc.Close()
-		return nil, fmt.Errorf("connector: TLS handshake: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrTLSHandshake, err)
 	}
 	return tc, nil
 }
@@ -104,7 +104,7 @@ func (d *DefaultDialer) dialViaCONNECT(ctx context.Context, ep Endpoint) (net.Co
 	proxyAddr := proxyDialAddress(ep.Proxy)
 	conn, err := d.dialTCP(ctx, proxyAddr)
 	if err != nil {
-		return nil, fmt.Errorf("connector: proxy dial: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrProxyDial, err)
 	}
 
 	release, err := bindConnToContext(ctx, conn)
@@ -118,7 +118,7 @@ func (d *DefaultDialer) dialViaCONNECT(ctx context.Context, ep Endpoint) (net.Co
 	if err := writeCONNECT(conn, authority); err != nil {
 		release()
 		_ = conn.Close()
-		return nil, mapConnCtxErr(ctx, fmt.Errorf("connector: write CONNECT: %w", err))
+		return nil, mapConnCtxErr(ctx, fmt.Errorf("%w: write: %w", ErrCONNECT, err))
 	}
 
 	br := bufio.NewReader(conn)
@@ -126,7 +126,7 @@ func (d *DefaultDialer) dialViaCONNECT(ctx context.Context, ep Endpoint) (net.Co
 	if err != nil {
 		release()
 		_ = conn.Close()
-		return nil, mapConnCtxErr(ctx, fmt.Errorf("connector: read CONNECT response: %w", err))
+		return nil, mapConnCtxErr(ctx, fmt.Errorf("%w: read response: %w", ErrCONNECT, err))
 	}
 	// CONNECT 200: the rest of the connection is the tunnel. Do NOT drain
 	// resp.Body (that would consume tunnel bytes / block until peer close).
@@ -138,7 +138,7 @@ func (d *DefaultDialer) dialViaCONNECT(ctx context.Context, ep Endpoint) (net.Co
 		}
 		release()
 		_ = conn.Close()
-		return nil, fmt.Errorf("connector: CONNECT refused: %s", resp.Status)
+		return nil, fmt.Errorf("%w: refused: %s", ErrCONNECT, resp.Status)
 	}
 	if resp.Body != nil {
 		_ = resp.Body.Close()

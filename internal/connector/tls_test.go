@@ -91,6 +91,9 @@ func TestVerifyPeerCertificate_WrongSubject(t *testing.T) {
 	if !errors.Is(err, ErrTLSVerify) {
 		t.Fatalf("want ErrTLSVerify, got %v", err)
 	}
+	if !errors.Is(err, ErrTLSSubjectMismatch) {
+		t.Fatalf("want ErrTLSSubjectMismatch, got %v", err)
+	}
 }
 
 func TestVerifyPeerCertificate_UntrustedCA(t *testing.T) {

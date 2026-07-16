@@ -63,7 +63,6 @@ func loadTicketKey(t *testing.T) (pubDER []byte, priv *rsa.PrivateKey) {
 	}
 	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 	if err != nil {
-		// try PKCS8
 		k, err2 := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err2 != nil {
 			t.Fatalf("parse private key: %v / %v", err, err2)
@@ -105,28 +104,24 @@ func (d errDialer) DialSPICE(ctx context.Context, ep connector.Endpoint) (net.Co
 	return nil, d.err
 }
 
-// mockLinkServer speaks the server side of the SPICE link protocol on conn.
-// expectedPassword is compared after OAEP decrypt (without trailing NUL).
-// result is the link-result code written after auth (LinkErrOK on success path
-// only if password matches when checkPassword is true).
+// mockLinkOpts configures the server side of the SPICE link protocol.
 type mockLinkOpts struct {
-	pubDER         []byte
-	priv           *rsa.PrivateKey
-	expectedPass   []byte
-	checkPassword  bool
-	forceResult    *uint32 // if set, write this result after auth regardless
-	badPubKeyLen   int     // if >0, send pubkey of this length (invalid)
-	captureMess    **protocol.LinkMess
-	replyError     uint32 // SpiceLinkReply.error
-	hangAfterReply bool
-	skipAuthRead   bool
+	pubDER        []byte
+	priv          *rsa.PrivateKey
+	expectedPass  []byte
+	checkPassword bool
+	forceResult   *uint32 // if set, write this result after auth regardless
+	captureMess   **protocol.LinkMess
+	replyError    uint32
+	// hangAfterMess: read LinkMess then block until ctx-like peer closes / test ends.
+	// Used for cancel/timeout tests (never sends a reply).
+	hangAfterMess bool
 }
 
 func runMockLinkServer(t *testing.T, conn net.Conn, opts mockLinkOpts) error {
 	t.Helper()
 	defer conn.Close()
 
-	// Read link header + body
 	hdr, err := protocol.ReadLinkHeader(conn)
 	if err != nil {
 		return fmt.Errorf("read link header: %w", err)
@@ -146,53 +141,30 @@ func runMockLinkServer(t *testing.T, conn net.Conn, opts mockLinkOpts) error {
 		*opts.captureMess = mess
 	}
 
-	pub := opts.pubDER
-	if opts.badPubKeyLen > 0 {
-		pub = make([]byte, opts.badPubKeyLen)
-		copy(pub, opts.pubDER)
-	}
-	// LinkReply.EncodeBody requires exact 162; for bad length we write manually.
-	if len(pub) == protocol.SpiceLinkPubKeyBytes {
-		reply := &protocol.LinkReply{
-			Error:      opts.replyError,
-			PubKey:     pub,
-			CommonCaps: protocol.Phase1CommonCaps(),
-		}
-		pkt, err := reply.EncodePacket()
-		if err != nil {
-			return err
-		}
-		if _, err := conn.Write(pkt); err != nil {
-			return err
-		}
-	} else {
-		// Manual short/long pubkey packet for negative tests.
-		// Fixed fields: error + pub_key[N] + counts + offset — not valid SPICE,
-		// but client ParseLinkPublicKey runs after DecodeLinkReply which expects 162.
-		// So we still send a 162-byte field of garbage for "wrong key" vs wrong length:
-		// Wrong length is enforced only when the DER length != 162 after decode,
-		// and DecodeLinkReply always copies 162 bytes. To test ParseLinkPublicKey
-		// length, we send valid framing with 162 bytes of non-SPKI data, OR we
-		// need session to check before decode... ParseLinkPublicKey checks der len.
-		// DecodeLinkReply always yields 162-byte PubKey. So wrong-length test must
-		// call ParseLinkPublicKey directly or we inject via a custom reply that
-		// the client reads as 162 zeros that fail parse as PKIX — that's "bad key"
-		// not "wrong length". For wrong length unit test, call ParseLinkPublicKey
-		// and/or test linkMain via a conn that returns a handcrafted body...
-		// Simplest: use LinkReply with 162-byte invalid DER for parse fail, and
-		// separate TestParseLinkPublicKeyWrongLength in session or security.
-		return fmt.Errorf("mock: use 162-byte pub or write custom")
-	}
-
-	if opts.hangAfterReply {
-		time.Sleep(50 * time.Millisecond)
-		return nil
-	}
-	if opts.skipAuthRead {
+	if opts.hangAfterMess {
+		// Block until client closes or deadline unblocks the peer read.
+		// Keep conn open: a short sleep is not enough for cancel tests.
+		buf := make([]byte, 1)
+		_, _ = conn.Read(buf) // wait for EOF / deadline from peer
 		return nil
 	}
 
-	// Read AuthSpice: mechanism u32 + 128 ciphertext
+	if len(opts.pubDER) != protocol.SpiceLinkPubKeyBytes {
+		return fmt.Errorf("mock: pubDER length %d want %d", len(opts.pubDER), protocol.SpiceLinkPubKeyBytes)
+	}
+	reply := &protocol.LinkReply{
+		Error:      opts.replyError,
+		PubKey:     opts.pubDER,
+		CommonCaps: protocol.Phase1CommonCaps(),
+	}
+	pkt, err := reply.EncodePacket()
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(pkt); err != nil {
+		return err
+	}
+
 	authBuf := make([]byte, 4+protocol.SpiceTicketCiphertextLen)
 	if _, err := io.ReadFull(conn, authBuf); err != nil {
 		return fmt.Errorf("read auth: %w", err)
@@ -213,7 +185,6 @@ func runMockLinkServer(t *testing.T, conn net.Conn, opts mockLinkOpts) error {
 		if err != nil {
 			result = protocol.LinkErrPermissionDenied
 		} else {
-			// strip trailing NUL
 			if len(plain) > 0 && plain[len(plain)-1] == 0 {
 				plain = plain[:len(plain)-1]
 			}
@@ -223,10 +194,7 @@ func runMockLinkServer(t *testing.T, conn net.Conn, opts mockLinkOpts) error {
 		}
 	}
 
-	if err := protocol.WriteLinkResult(conn, result); err != nil {
-		return err
-	}
-	return nil
+	return protocol.WriteLinkResult(conn, result)
 }
 
 func TestDialMain_LinkOK(t *testing.T) {
@@ -274,7 +242,6 @@ func TestDialMain_LinkOK(t *testing.T) {
 		t.Fatal("expected MainConn")
 	}
 
-	// connection_id=0 on main mess
 	if gotMess == nil {
 		t.Fatal("server did not capture LinkMess")
 	}
@@ -374,7 +341,6 @@ func TestDialMain_BadLinkResult_TicketClass(t *testing.T) {
 }
 
 func TestLinkMain_WrongPubKey_Error(t *testing.T) {
-	// Valid framing with 162-byte non-SPKI payload → ParseLinkPublicKey fails.
 	client, server := net.Pipe()
 	defer client.Close()
 
@@ -391,7 +357,6 @@ func TestLinkMain_WrongPubKey_Error(t *testing.T) {
 			errCh <- err
 			return
 		}
-		// Garbage 162-byte "pubkey"
 		garbage := bytes.Repeat([]byte{0x41}, protocol.SpiceLinkPubKeyBytes)
 		reply := &protocol.LinkReply{
 			Error:      protocol.LinkErrOK,
@@ -407,9 +372,7 @@ func TestLinkMain_WrongPubKey_Error(t *testing.T) {
 		errCh <- err
 	}()
 
-	s, err := session.New(session.Config{
-		Password: []byte("x"),
-	})
+	s, err := session.New(session.Config{Password: []byte("x")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +386,6 @@ func TestLinkMain_WrongPubKey_Error(t *testing.T) {
 	if !errors.As(err, &uxErr) {
 		t.Fatalf("want ux.Error, got %v", err)
 	}
-	// Not Ticket — key parse failure
 	if uxErr.Class == ux.ClassTicket {
 		t.Fatalf("wrong class Ticket for pubkey parse: %v", err)
 	}
@@ -431,7 +393,6 @@ func TestLinkMain_WrongPubKey_Error(t *testing.T) {
 }
 
 func TestParseLinkPublicKey_WrongLength(t *testing.T) {
-	// Required by PR 06: wrong pubkey length → error (security helper).
 	_, err := security.ParseLinkPublicKey([]byte{1, 2, 3})
 	if err == nil {
 		t.Fatal("expected error")
@@ -450,7 +411,6 @@ func TestParseLinkPublicKey_WrongLength(t *testing.T) {
 }
 
 func TestMainLinkMess_ConnectionIDZero(t *testing.T) {
-	// Explicit unit assertion: main mess always connection_id=0.
 	m := protocol.NewMainLinkMess(nil)
 	if m.ConnectionID != 0 {
 		t.Fatalf("connection_id=%d", m.ConnectionID)
@@ -471,20 +431,16 @@ func TestPasswordCopyAndWipeOnClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Mutate caller slice; session must have its own copy.
 	orig[0] = 'X'
-	// We cannot read session password; verify Close does not panic and Linked false.
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if s.Linked() {
 		t.Fatal("linked after close")
 	}
-	// Double close OK
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Caller still has their (mutated) bytes; Wipe only session copy.
 	if orig[0] != 'X' {
 		t.Fatal("caller slice should be untouched by Close")
 	}
@@ -493,7 +449,23 @@ func TestPasswordCopyAndWipeOnClose(t *testing.T) {
 func TestDialMain_MapsProxyError(t *testing.T) {
 	s, err := session.New(session.Config{
 		Endpoint: connector.Endpoint{Host: "h", Port: 1, AllowCleartext: true},
-		Dialer:   errDialer{err: fmt.Errorf("connector: CONNECT refused: 403 Forbidden")},
+		Dialer:   errDialer{err: fmt.Errorf("%w: refused: 403 Forbidden", connector.ErrCONNECT)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	err = s.DialMain(context.Background())
+	var uxErr *ux.Error
+	if !errors.As(err, &uxErr) || uxErr.Class != ux.ClassProxy {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestDialMain_MapsProxyDialError(t *testing.T) {
+	s, err := session.New(session.Config{
+		Endpoint: connector.Endpoint{Host: "h", Port: 1, AllowCleartext: true},
+		Dialer:   errDialer{err: fmt.Errorf("%w: %v", connector.ErrProxyDial, errors.New("connection refused"))},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -507,7 +479,7 @@ func TestDialMain_MapsProxyError(t *testing.T) {
 }
 
 func TestDialMain_MapsTLSSubject(t *testing.T) {
-	base := fmt.Errorf("%w: subject does not match host-subject", connector.ErrTLSVerify)
+	base := fmt.Errorf("%w: %w", connector.ErrTLSVerify, connector.ErrTLSSubjectMismatch)
 	s, err := session.New(session.Config{
 		Endpoint: connector.Endpoint{Host: "h", Port: 1, AllowCleartext: true},
 		Dialer:   errDialer{err: base},
@@ -523,10 +495,26 @@ func TestDialMain_MapsTLSSubject(t *testing.T) {
 	}
 }
 
-func TestDialMain_CleartextDenied_Config(t *testing.T) {
-	// Real dialer + cleartext denied before network.
+func TestDialMain_MapsTLSHandshake(t *testing.T) {
+	base := fmt.Errorf("%w: %w", connector.ErrTLSHandshake, errors.New("remote error"))
 	s, err := session.New(session.Config{
-		Endpoint: connector.Endpoint{Host: "127.0.0.1", Port: 9}, // no AllowCleartext, no TLS
+		Endpoint: connector.Endpoint{Host: "h", Port: 1, AllowCleartext: true},
+		Dialer:   errDialer{err: base},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	err = s.DialMain(context.Background())
+	var uxErr *ux.Error
+	if !errors.As(err, &uxErr) || uxErr.Class != ux.ClassTLSTrust {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestDialMain_CleartextDenied_Config(t *testing.T) {
+	s, err := session.New(session.Config{
+		Endpoint: connector.Endpoint{Host: "127.0.0.1", Port: 9},
 		Password: []byte("x"),
 	})
 	if err != nil {
@@ -537,6 +525,12 @@ func TestDialMain_CleartextDenied_Config(t *testing.T) {
 	var uxErr *ux.Error
 	if !errors.As(err, &uxErr) || uxErr.Class != ux.ClassConfig {
 		t.Fatalf("got %v", err)
+	}
+	if uxErr.Message != ux.MsgConfigEndpoint {
+		t.Fatalf("message = %q, want %q", uxErr.Message, ux.MsgConfigEndpoint)
+	}
+	if !errors.Is(err, connector.ErrCleartextDenied) {
+		t.Fatalf("want ErrCleartextDenied wrapped, got %v", err)
 	}
 }
 
@@ -570,6 +564,156 @@ func TestLinkMain_ConnectionIDZeroCaptured(t *testing.T) {
 	}
 	if gotMess == nil || gotMess.ConnectionID != 0 {
 		t.Fatalf("mess=%+v", gotMess)
+	}
+	_ = <-errCh
+}
+
+func TestLinkMain_PasswordTooLong_Config(t *testing.T) {
+	pubDER, _ := loadTicketKey(t)
+	// MaxSpicePasswordLen is 60; oversize must not surface as Ticket.
+	password := bytes.Repeat([]byte("a"), security.MaxSpicePasswordLen+1)
+
+	client, server := net.Pipe()
+	defer client.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		// Server will send reply; client fails at encrypt before auth write.
+		defer server.Close()
+		hdr, err := protocol.ReadLinkHeader(server)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		body := make([]byte, hdr.Size)
+		if _, err := io.ReadFull(server, body); err != nil {
+			errCh <- err
+			return
+		}
+		reply := &protocol.LinkReply{
+			Error:      protocol.LinkErrOK,
+			PubKey:     pubDER,
+			CommonCaps: protocol.Phase1CommonCaps(),
+		}
+		pkt, err := reply.EncodePacket()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		_, _ = server.Write(pkt)
+		// Client may not send auth; wait for close.
+		buf := make([]byte, 1)
+		_, _ = server.Read(buf)
+		errCh <- nil
+	}()
+
+	s, err := session.New(session.Config{Password: password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	err = s.LinkMain(context.Background(), client)
+	if err == nil {
+		t.Fatal("expected oversize password error")
+	}
+	var uxErr *ux.Error
+	if !errors.As(err, &uxErr) || uxErr.Class != ux.ClassConfig {
+		t.Fatalf("class = %v, err = %v", uxErr, err)
+	}
+	if uxErr.Message != ux.MsgConfigFieldTooLarge {
+		t.Fatalf("message = %q", uxErr.Message)
+	}
+	_ = client.Close()
+	_ = <-errCh
+}
+
+func TestLinkMain_ContextCancelMidRead(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runMockLinkServer(t, server, mockLinkOpts{hangAfterMess: true})
+	}()
+
+	s, err := session.New(session.Config{Password: []byte("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after mess is written and client is blocked on ReadLinkReply.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err = s.LinkMain(ctx, client)
+	if err == nil {
+		t.Fatal("expected cancel error")
+	}
+	var uxErr *ux.Error
+	if !errors.As(err, &uxErr) || uxErr.Class != ux.ClassTransport {
+		t.Fatalf("class = %v, err = %v", uxErr, err)
+	}
+	// Cancel unblocks I/O via SetDeadline; mapLinkIOErr prefers ctx.Err().
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled in chain, got %v", err)
+	}
+	// Unblock hangAfterMess mock (server reads until peer close).
+	_ = client.Close()
+	_ = <-errCh
+}
+
+func TestLinkMain_InvalidMagic_ConfigProtocol(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		defer server.Close()
+		// Consume client mess
+		hdr, err := protocol.ReadLinkHeader(server)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		body := make([]byte, hdr.Size)
+		if _, err := io.ReadFull(server, body); err != nil {
+			errCh <- err
+			return
+		}
+		// Reply with wrong magic (not REDQ).
+		bad := make([]byte, protocol.LinkHeaderSize)
+		binary.LittleEndian.PutUint32(bad[0:4], 0xdeadbeef)
+		binary.LittleEndian.PutUint32(bad[4:8], protocol.VersionMajor)
+		binary.LittleEndian.PutUint32(bad[8:12], protocol.VersionMinor)
+		binary.LittleEndian.PutUint32(bad[12:16], 0)
+		_, err = server.Write(bad)
+		errCh <- err
+	}()
+
+	s, err := session.New(session.Config{Password: []byte("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	err = s.LinkMain(context.Background(), client)
+	if err == nil {
+		t.Fatal("expected protocol error")
+	}
+	var uxErr *ux.Error
+	if !errors.As(err, &uxErr) || uxErr.Class != ux.ClassConfig {
+		t.Fatalf("class = %v, err = %v", uxErr, err)
+	}
+	if uxErr.Message != ux.MsgConfigProtocol {
+		t.Fatalf("message = %q", uxErr.Message)
+	}
+	if !errors.Is(err, protocol.ErrInvalidMagic) {
+		t.Fatalf("want ErrInvalidMagic, got %v", err)
 	}
 	_ = <-errCh
 }

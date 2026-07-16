@@ -30,7 +30,12 @@ const (
 	MsgTransport           = "Connection lost — re-open Console for a new ticket"
 	MsgConfigNotSpice      = "Not a SPICE connection file"
 	MsgConfigFieldTooLarge = "Connection file rejected (field too large)"
-	MsgInternal            = "An unexpected error occurred"
+	// MsgConfigEndpoint covers dial/setup validation (cleartext policy, missing CA,
+	// bad host/port, unsupported proxy) — Class is Config; Message is best-effort.
+	MsgConfigEndpoint = "Connection settings are invalid or incomplete"
+	// MsgConfigProtocol is used when the peer does not speak SPICE (bad magic/version).
+	MsgConfigProtocol = "Peer is not a SPICE server"
+	MsgInternal       = "An unexpected error occurred"
 )
 
 // Error is a classified, user-facing error.

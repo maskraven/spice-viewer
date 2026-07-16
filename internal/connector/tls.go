@@ -11,6 +11,11 @@ import (
 // ErrTLSVerify is returned when peer certificate verification fails.
 var ErrTLSVerify = errors.New("connector: TLS peer verification failed")
 
+// ErrTLSSubjectMismatch is returned when the leaf subject does not match
+// host-subject (pin mode). Always wrapped together with ErrTLSVerify so both
+// errors.Is checks succeed.
+var ErrTLSSubjectMismatch = errors.New("connector: TLS subject does not match host-subject")
+
 // buildTLSConfig constructs a tls.Config for the given TLSParams.
 //
 // Proxmox / subject-pin mode (HostSubject non-empty):
@@ -92,7 +97,7 @@ func verifyPeerCertificate(rawCerts [][]byte, roots *x509.CertPool, hostSubject 
 	}
 	if hostSubject != "" {
 		if !subjectMatches(leaf.Subject, hostSubject) {
-			return fmt.Errorf("%w: subject does not match host-subject", ErrTLSVerify)
+			return fmt.Errorf("%w: %w", ErrTLSVerify, ErrTLSSubjectMismatch)
 		}
 	}
 	return nil

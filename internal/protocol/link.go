@@ -5,8 +5,19 @@ package protocol
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+)
+
+// Protocol framing / link validation sentinels for stable errors.Is classification.
+var (
+	// ErrInvalidMagic is returned when the link header magic is not REDQ.
+	ErrInvalidMagic = errors.New("spice: invalid magic")
+	// ErrVersionMismatch is returned when the link header major version is unsupported.
+	ErrVersionMismatch = errors.New("spice: version mismatch")
+	// ErrLinkReplyTooLarge is returned when SpiceLinkReply body size exceeds the guard.
+	ErrLinkReplyTooLarge = errors.New("spice: link reply size too large")
 )
 
 // LinkHeader is SpiceLinkHeader: magic, major, minor, size (of body following).
@@ -52,10 +63,10 @@ func ReadLinkHeader(r io.Reader) (LinkHeader, error) {
 // Validate checks magic and protocol major version.
 func (h LinkHeader) Validate() error {
 	if h.Magic != MagicUint32 {
-		return fmt.Errorf("spice: invalid magic 0x%08x want 0x%08x (REDQ)", h.Magic, MagicUint32)
+		return fmt.Errorf("%w: 0x%08x want 0x%08x (REDQ)", ErrInvalidMagic, h.Magic, MagicUint32)
 	}
 	if h.Major != VersionMajor {
-		return fmt.Errorf("spice: major version %d want %d", h.Major, VersionMajor)
+		return fmt.Errorf("%w: major %d want %d", ErrVersionMismatch, h.Major, VersionMajor)
 	}
 	return nil
 }
@@ -223,7 +234,7 @@ func ReadLinkReply(r io.Reader) (*LinkReply, LinkHeader, error) {
 		return nil, hdr, err
 	}
 	if hdr.Size > 4096 {
-		return nil, hdr, fmt.Errorf("spice: link reply size %d too large", hdr.Size)
+		return nil, hdr, fmt.Errorf("%w: %d", ErrLinkReplyTooLarge, hdr.Size)
 	}
 	body := make([]byte, hdr.Size)
 	if _, err := io.ReadFull(r, body); err != nil {

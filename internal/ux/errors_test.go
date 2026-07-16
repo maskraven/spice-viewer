@@ -17,8 +17,13 @@ var stableMessages = map[ux.Class][]string{
 	ux.ClassProxy:      {ux.MsgProxy},
 	ux.ClassTicket:     {ux.MsgTicket},
 	ux.ClassTransport:  {ux.MsgTransport},
-	ux.ClassConfig:     {ux.MsgConfigNotSpice, ux.MsgConfigFieldTooLarge},
-	ux.ClassInternal:   {ux.MsgInternal},
+	ux.ClassConfig: {
+		ux.MsgConfigNotSpice,
+		ux.MsgConfigFieldTooLarge,
+		ux.MsgConfigEndpoint,
+		ux.MsgConfigProtocol,
+	},
+	ux.ClassInternal: {ux.MsgInternal},
 }
 
 func TestStableClassValues(t *testing.T) {
@@ -51,6 +56,8 @@ func TestStableMessages(t *testing.T) {
 		{ux.MsgTransport, "Connection lost — re-open Console for a new ticket"},
 		{ux.MsgConfigNotSpice, "Not a SPICE connection file"},
 		{ux.MsgConfigFieldTooLarge, "Connection file rejected (field too large)"},
+		{ux.MsgConfigEndpoint, "Connection settings are invalid or incomplete"},
+		{ux.MsgConfigProtocol, "Peer is not a SPICE server"},
 	}
 	for _, tc := range cases {
 		if tc.msg != tc.want {

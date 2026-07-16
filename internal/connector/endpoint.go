@@ -64,6 +64,19 @@ var (
 	ErrInvalidProxy       = errors.New("connector: invalid proxy URL")
 )
 
+// Dial / handshake sentinels for stable errors.Is classification by session/ux.
+// Wrapped into returned errors (may include additional detail via %w / %v).
+var (
+	// ErrCONNECT is returned when the HTTP CONNECT proxy rejects the tunnel
+	// (non-200) or CONNECT request/response I/O fails after the TCP dial.
+	ErrCONNECT = errors.New("connector: CONNECT failed")
+	// ErrProxyDial is returned when the TCP dial to the proxy itself fails.
+	ErrProxyDial = errors.New("connector: proxy dial failed")
+	// ErrTLSHandshake is returned when the TLS handshake fails (before or during
+	// peer verification). May wrap ErrTLSVerify / ErrTLSSubjectMismatch.
+	ErrTLSHandshake = errors.New("connector: TLS handshake failed")
+)
+
 // validate checks Endpoint constraints before dialing.
 func (ep Endpoint) validate() error {
 	if ep.Host == "" {
