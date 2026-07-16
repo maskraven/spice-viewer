@@ -1,8 +1,11 @@
 // Package channel implements SPICE channel types (main, display, inputs,
 // cursor, and later playback/record/usbredir/port/webdav).
 //
-// Phase 1 PR 07: open-policy helpers used by session.Channel manager.
-// Display draw ops and inputs scancodes are intentionally not implemented yet.
+// Phase 1:
+//   - Open-policy helpers used by session.Channel manager (PR 07)
+//   - Inputs channel: mouse modes, PC XT scancodes, UI inject API (PR 10)
+//
+// Display draw ops live in later display PRs.
 //
 // Import rules: no UI imports.
 package channel
