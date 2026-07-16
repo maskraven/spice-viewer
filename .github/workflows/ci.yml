@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "execute-plan/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test / vet / fmt / imports
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "gofmt needed on:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: import boundary check
+        run: ./scripts/check_imports.sh
