@@ -4,6 +4,7 @@
 package channel
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sync"
@@ -434,4 +435,36 @@ func (in *Inputs) flushPositionLocked() error {
 	in.motionCount++
 	in.havePendingPos = false
 	return nil
+}
+
+// Run reads server→client mini-header messages from r until ctx cancel or EOF.
+//
+// r is typically the same net.Conn used as the writer in NewInputs. Fatal I/O
+// errors and context cancel stop the loop (session-fatal for the inputs channel).
+// HandleMessage errors (e.g. short key-modifier bodies) are returned as fatal.
+func (in *Inputs) Run(ctx context.Context, r io.Reader) error {
+	if in == nil {
+		return fmt.Errorf("channel: nil Inputs")
+	}
+	if r == nil {
+		return fmt.Errorf("channel: inputs: nil reader")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		msg, err := protocol.ReadMessage(r)
+		if err != nil {
+			if err == io.EOF || isClosedConn(err) {
+				return err
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		if err := in.HandleMessage(msg); err != nil {
+			return err
+		}
+	}
 }

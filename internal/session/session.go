@@ -260,6 +260,20 @@ func (s *Session) CursorError() error {
 	return s.cursorErr
 }
 
+// MainInit returns a copy of MAIN_INIT after a successful OpenChannels.
+// ok is false if open has not succeeded.
+func (s *Session) MainInit() (protocol.MainInit, bool) {
+	if s == nil {
+		return protocol.MainInit{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mainInit == nil || s.openState != openReady {
+		return protocol.MainInit{}, false
+	}
+	return *s.mainInit, true
+}
+
 // Close tears down channels in design order and wipes the session password.
 //
 //  1. cancel session context (stop new opens)
