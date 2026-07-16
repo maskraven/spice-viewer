@@ -159,6 +159,127 @@ func TestDialSPICE_HostControlCharsBeforeDial(t *testing.T) {
 	}
 }
 
+// deadlineRecorder records SetDeadline calls for race assertions (Issue 6).
+type deadlineRecorder struct {
+	net.Conn
+	mu   sync.Mutex
+	log  []time.Time // zero means clear
+	nset int
+}
+
+func (d *deadlineRecorder) SetDeadline(t time.Time) error {
+	d.mu.Lock()
+	d.log = append(d.log, t)
+	d.nset++
+	d.mu.Unlock()
+	return d.Conn.SetDeadline(t)
+}
+
+func (d *deadlineRecorder) lastDeadline() (time.Time, int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.log) == 0 {
+		return time.Time{}, 0
+	}
+	return d.log[len(d.log)-1], len(d.log)
+}
+
+// TestBindConnToContext_ReleaseWinsOverCancel ensures a concurrent cancel cannot
+// leave a past deadline on the conn after release (Issue 6).
+func TestBindConnToContext_ReleaseWinsOverCancel(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		c1, c2 := net.Pipe()
+		rec := &deadlineRecorder{Conn: c1}
+		ctx, cancel := context.WithCancel(context.Background())
+
+		release, err := bindConnToContext(ctx, rec)
+		if err != nil {
+			c1.Close()
+			c2.Close()
+			t.Fatal(err)
+		}
+
+		// Fire cancel and release concurrently; release must win for the tunnel.
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			cancel()
+		}()
+		go func() {
+			defer wg.Done()
+			release()
+		}()
+		wg.Wait()
+		// Allow cancel watcher to finish if it lost the select race.
+		time.Sleep(2 * time.Millisecond)
+
+		last, n := rec.lastDeadline()
+		if !last.IsZero() && last.Before(time.Now()) {
+			c1.Close()
+			c2.Close()
+			t.Fatalf("iter %d: past deadline left after release (last=%v n=%d log=%v)", i, last, n, rec.log)
+		}
+
+		// Concurrent peer read so pipe Write can complete (pipe is synchronous).
+		errCh := make(chan error, 1)
+		go func() {
+			buf := make([]byte, 2)
+			_ = c2.SetReadDeadline(time.Now().Add(time.Second))
+			_, err := io.ReadFull(c2, buf)
+			errCh <- err
+		}()
+		_ = c1.SetWriteDeadline(time.Now().Add(time.Second))
+		if _, err := c1.Write([]byte("ok")); err != nil {
+			c1.Close()
+			c2.Close()
+			t.Fatalf("iter %d: tunnel conn unusable after release+cancel: %v", i, err)
+		}
+		if err := <-errCh; err != nil {
+			c1.Close()
+			c2.Close()
+			t.Fatalf("iter %d: peer read: %v", i, err)
+		}
+		c1.Close()
+		c2.Close()
+	}
+}
+
+// TestBindConnToContext_CancelBeforeReleaseStillInterrupts verifies cancel still
+// unblocks CONNECT I/O when release has not run yet.
+func TestBindConnToContext_CancelBeforeReleaseStillInterrupts(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	release, err := bindConnToContext(ctx, c1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	errCh := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1)
+		_, err := c1.Read(buf)
+		errCh <- err
+	}()
+
+	// Ensure Read is blocked, then cancel.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected read error after cancel")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("read did not unblock after cancel")
+	}
+}
+
 func TestWriteCONNECT_ExactRequestLine(t *testing.T) {
 	authority := connectAuthority(pveHost, 61002)
 	var buf strings.Builder

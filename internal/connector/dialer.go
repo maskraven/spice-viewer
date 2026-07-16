@@ -158,6 +158,9 @@ func (d *DefaultDialer) dialViaCONNECT(ctx context.Context, ep Endpoint) (net.Co
 // when ctx is cancelled. The returned release must be called exactly once:
 // it stops the cancel watcher and clears the deadline (so the tunnel is not
 // bound to the dial context after CONNECT completes).
+//
+// Cancel and release coordinate under mu so a late cancel cannot re-arm a past
+// deadline after release has cleared it (Issue 6).
 func bindConnToContext(ctx context.Context, conn net.Conn) (release func(), err error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
@@ -165,22 +168,33 @@ func bindConnToContext(ctx context.Context, conn net.Conn) (release func(), err 
 		}
 	}
 
+	var mu sync.Mutex
+	released := false
 	done := make(chan struct{})
 	var once sync.Once
+
 	go func() {
 		select {
 		case <-ctx.Done():
-			// Unblock Read/Write without permanently closing: a past deadline
-			// fails in-flight I/O; release() clears it if CONNECT already finished.
-			_ = conn.SetDeadline(time.Unix(1, 0))
+			mu.Lock()
+			if !released {
+				// Unblock in-flight Read/Write only while CONNECT is still active.
+				_ = conn.SetDeadline(time.Unix(1, 0))
+			}
+			mu.Unlock()
 		case <-done:
 		}
 	}()
 
 	release = func() {
 		once.Do(func() {
+			mu.Lock()
+			released = true
 			close(done)
+			// Clear dial deadline under the same lock so the cancel watcher
+			// cannot SetDeadline(past) after we hand the tunnel back.
 			_ = conn.SetDeadline(time.Time{})
+			mu.Unlock()
 		})
 	}
 	return release, nil
