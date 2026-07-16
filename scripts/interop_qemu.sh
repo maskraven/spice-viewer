@@ -12,6 +12,9 @@
 #
 # Requirements: qemu-system-x86_64 (or $QEMU) built with SPICE support.
 # Optional: remote-viewer for manual cross-check.
+#
+# Safety: SPICE always binds addr=127.0.0.1 (localhost only). SPICE_PORT must be
+# digits-only; SPICE_PASSWORD must not contain ',' or newlines (QEMU -spice CSV).
 set -euo pipefail
 
 SPICE_PORT="${SPICE_PORT:-5900}"
@@ -24,23 +27,35 @@ ISO="${ISO:-}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
+# Fail-closed: only report SPICE when QEMU positively advertises the -spice option.
 have_spice() {
   if ! command -v "$QEMU" >/dev/null 2>&1; then
     return 1
   fi
-  # QEMU -spice help or -device help varies by build; try launching -version and probe -spice.
+  # Positive capability: -spice help succeeds (SPICE-enabled builds).
   if "$QEMU" -spice help >/dev/null 2>&1; then
     return 0
   fi
-  # Older builds: accept if binary exists; user may still have spice.
-  if "$QEMU" -version 2>&1 | grep -qi spice; then
-    return 0
+  # Some builds print spice on -version but still lack a working -spice option.
+  # Do not treat version text alone as sufficient.
+  return 1
+}
+
+validate_env() {
+  # Digits only — reject commas so values cannot inject -spice CSV keys.
+  case "$SPICE_PORT" in
+    ''|*[!0-9]*) die "SPICE_PORT must be digits-only (got: $SPICE_PORT)" ;;
+  esac
+  if [ "$SPICE_PORT" -lt 1 ] || [ "$SPICE_PORT" -gt 65535 ]; then
+    die "SPICE_PORT must be in 1..65535 (got: $SPICE_PORT)"
   fi
-  # Probe option parse error vs unknown option
-  if "$QEMU" -spice port=0,disable-ticketing -machine none -nographic -display none 2>&1 | grep -qi "invalid|unknown option.*spice|SPICE support is disabled"; then
-    return 1
-  fi
-  return 0
+  # QEMU -spice is a comma-separated option list; commas or newlines would inject keys
+  # (e.g. addr=0.0.0.0) past our mandatory addr=127.0.0.1.
+  case "$SPICE_PASSWORD" in
+    *','*|*$'\n'*|*$'\r'*)
+      die "SPICE_PASSWORD must not contain comma or newline (would break -spice option CSV)"
+      ;;
+  esac
 }
 
 print_vv() {
@@ -58,6 +73,7 @@ EOF
 }
 
 if [[ "${1:-}" == "--print-vv" ]]; then
+  validate_env
   print_vv
   exit 0
 fi
@@ -66,6 +82,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   sed -n '2,20p' "$0"
   exit 0
 fi
+
+validate_env
 
 if ! have_spice; then
   cat >&2 <<EOF
@@ -93,6 +111,9 @@ echo "Or: remote-viewer <( $0 --print-vv )"
 echo "Stop with Ctrl-C."
 echo "---"
 
+# Always pin addr=127.0.0.1 after port= so the lab cannot listen on all interfaces.
+# Legacy password= is used for broad QEMU bottle compatibility (password-secret needs
+# a separate -object secret,id=… which is overkill for this smoke script).
 args=(
   -machine q35,accel=tcg
   -m "$MEMORY_MB"
@@ -117,12 +138,6 @@ if [[ -z "$DISK" && -z "$ISO" ]]; then
   # Many QEMU builds need something bootable; use -S to pause CPU if no media.
   args+=(-S)
   echo "Note: no DISK/ISO set — VM paused (-S). Link/auth still exercisable."
-fi
-
-# Prefer modern password-secret if available, else password= (deprecated but widely present).
-if "$QEMU" -spice help 2>&1 | grep -q password-secret; then
-  # Use legacy password= for simplicity in lab; document secret object for production labs.
-  :
 fi
 
 exec "$QEMU" "${args[@]}"

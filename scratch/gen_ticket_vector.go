@@ -9,13 +9,13 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
-	"io"
-	"math/big"
 	"os"
 )
 
-// fixedReader returns endless zeros after exhausting seed — used only for
-// deterministic OAEP seed generation in golden vectors.
+// fixedReader is a deterministic io.Reader for test-only keygen and OAEP seeds.
+// It first returns bytes from seed in order; after the seed is exhausted it
+// extends with a simple LCG-like sequence (byte(i*17+3)), never blocking.
+// OAEP only consumes the first hLen (20 for SHA-1) seed bytes for goldens.
 type fixedReader struct {
 	seed []byte
 	i    int
@@ -27,7 +27,7 @@ func (r *fixedReader) Read(p []byte) (int, error) {
 			p[i] = r.seed[r.i]
 			r.i++
 		} else {
-			// Continue with a simple LCG so we never block; documented seed drives first bytes.
+			// LCG-like extension after seed; keygen consumes many bytes this way.
 			r.seed = append(r.seed, byte(r.i*17+3))
 			p[i] = r.seed[r.i]
 			r.i++
@@ -137,39 +137,12 @@ func main() {
 	must(os.WriteFile("testdata/vectors/ticket_rsa1024_public.pem", pubPEM, 0o644))
 	must(os.WriteFile("testdata/vectors/ticket_rsa1024_spki.der", pubDER, 0o644))
 
-	// modulus hex for documentation
+	// README.md is hand-maintained (fixture index for connect/DN files).
+	// Do not overwrite it from this generator; print key metadata to stderr instead.
 	nHex := hex.EncodeToString(key.N.Bytes())
 	eHex := fmt.Sprintf("%x", key.E)
-
-	meta := fmt.Sprintf(`# Golden AuthSpice ticket vectors (Milestone 0)
-#
-# Algorithm: RSAES-OAEP, hash=SHA-1, MGF1=SHA-1, label=empty
-# Key: 1024-bit RSA, public exponent 65537
-# SPKI DER length: %d (SPICE_TICKET_PUBKEY_BYTES = 1024/8+34 = 162)
-# Ciphertext length: 128 (SPICE_TICKET_KEY_PAIR_LENGTH/8)
-# Plaintext: password bytes + single trailing NUL (matches spice-gtk strlen+1)
-#
-# OAEP seed (hex, 20 bytes SHA-1 hLen) used for deterministic ciphertext:
-#   %s
-#
-# WARNING: this key is TEST-ONLY, generated with a deterministic PRNG.
-# Never use for real sessions.
-#
-# modulus (hex):
-# %s
-# exponent (hex): %s
-#
-# Files:
-#   ticket_rsa1024_private.pem  PKCS#1 RSA PRIVATE KEY
-#   ticket_rsa1024_public.pem   SPKI PUBLIC KEY PEM
-#   ticket_rsa1024_spki.der     raw 162-byte SPKI DER (as on SpiceLinkReply.pub_key)
-#   ticket_vectors.json         password → ciphertext cases
-`, len(pubDER), hex.EncodeToString(oaepSeed), nHex, eHex)
-	must(os.WriteFile("testdata/vectors/README.md", []byte(meta), 0o644))
-
-	// Also emit N and D as big.Int for debugging
-	_ = big.NewInt(0)
-	_ = io.Discard
+	fmt.Fprintf(os.Stderr, "SPKI DER len=%d OAEP seed=%s modulus=%s e=%s\n",
+		len(pubDER), hex.EncodeToString(oaepSeed), nHex, eHex)
 
 	json := fmt.Sprintf(`{
   "description": "AuthSpice RSAES-OAEP SHA-1 golden vectors for github.com/maskraven/virt-viewer",

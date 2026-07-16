@@ -87,6 +87,17 @@
       "expect_match_design": true,
       "expect_match_spice_gtk_x509_name_cmp": false,
       "comment": "X509_NAME_cmp is order-sensitive; design field compare is order-independent"
+    },
+    {
+      "name": "missing_expected_rdn_on_cert",
+      "host_subject": "OU=PVE Cluster Node,O=Proxmox Virtual Environment,CN=pve.example.com",
+      "cert_subject_rdns": {
+        "O": ["Proxmox Virtual Environment"],
+        "CN": "pve.example.com"
+      },
+      "expect_match_design": false,
+      "expect_match_spice_gtk_x509_name_cmp": false,
+      "comment": "host-subject requires OU that cert lacks; design subset-match and spice-gtk both reject (guards against overfitting the permissive extra-on-cert case)"
     }
   ]
 }

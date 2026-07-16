@@ -21,10 +21,13 @@ This memo pins **upstream file paths and commit SHAs** used as normative referen
 | **spice-common** | `71e45706981973014eaab3d4b533d35d79e19ffa` | GitLab `spice/spice-common` (ssl_verify; 2025-08-30) |
 | **spice server** | `91d42c4d8de76ca00420fc112c17a82772bd1dd0` | GitLab `spice/spice` (reds ticket decrypt) |
 | **virt-viewer** | `dbb35f4eb692813ddf7ef1f06c21b0266c7267ec` | GitLab `virt-viewer/virt-viewer` |
-| **QEMU** (spice core opts) | `73ae0be3f14b…` tip at research time on `ui/spice-core.c` | Ticket set via `spice_server_set_ticket`; crypto is in spice-server |
 | **Proxmox qemu-server** | `b69480d6110c005b9eb936c55c0438607d10975b` | `spiceproxy` API endpoint |
 | **Proxmox pve-access-control** | `5ccd07d9302562b73374d331b63d25b04b86766c` | `remote_viewer_config`, `host-subject` |
 | **Proxmox pve-common** | `f1c3703aab2e6734d450b84f34708ac57b23a3aa` | `PVE::Ticket` proxy ticket format |
+
+**Non-normative (lab only):** QEMU `ui/spice-core.c` tip at research time was
+`73ae0be3f14b1df2ffea26387586e727e6d4434c` (sets ticket via `spice_server_set_ticket`).
+Ticket **crypto** is entirely in spice-server (`reds.cpp` above), not in QEMU proper.
 
 Secondary confirmation (non-normative): Shaken Fist Kerbside link-protocol writeup; SPICE protocol HTML at spice-space.org (documents `SPICE_TICKET_PUBKEY_BYTES = 162` and EME-OAEP SHA-1).
 
