@@ -143,3 +143,44 @@ const MiniHeaderSize = 6
 
 // DataHeaderSize is sizeof(SpiceDataHeader): serial u64 + type u16 + size u32 + sub_list u32.
 const DataHeaderSize = 18
+
+// Cursor channel server messages (spice/enums.h; start at MsgFirstAvail).
+// Wire layout from spice-common spice.proto / generated demarshallers.
+const (
+	MsgCursorInit     uint16 = 101 // SPICE_MSG_CURSOR_INIT
+	MsgCursorReset    uint16 = 102 // SPICE_MSG_CURSOR_RESET
+	MsgCursorSet      uint16 = 103 // SPICE_MSG_CURSOR_SET
+	MsgCursorMove     uint16 = 104 // SPICE_MSG_CURSOR_MOVE
+	MsgCursorHide     uint16 = 105 // SPICE_MSG_CURSOR_HIDE
+	MsgCursorTrail    uint16 = 106
+	MsgCursorInvalOne uint16 = 107
+	MsgCursorInvalAll uint16 = 108
+)
+
+// Cursor types (SpiceCursorType) — wire is enum8 in CursorHeader.
+const (
+	CursorTypeAlpha   uint8 = 0
+	CursorTypeMono    uint8 = 1
+	CursorTypeColor4  uint8 = 2
+	CursorTypeColor8  uint8 = 3
+	CursorTypeColor16 uint8 = 4
+	CursorTypeColor24 uint8 = 5
+	CursorTypeColor32 uint8 = 6
+)
+
+// Cursor flags (SpiceCursorFlags) — flags16 on the wire.
+const (
+	CursorFlagNone      uint16 = 1 << 0 // no cursor shape
+	CursorFlagCacheMe   uint16 = 1 << 1
+	CursorFlagFromCache uint16 = 1 << 2
+)
+
+// CursorHeaderWireSize is sizeof(SpiceCursorHeader) on the wire:
+// unique u64 + type u8 + width/height/hot_x/hot_y u16×4 = 17.
+const CursorHeaderWireSize = 17
+
+// MaxCursorSide / MaxCursorPixels guard best-effort shape decode.
+const (
+	MaxCursorSide   = 256
+	MaxCursorPixels = MaxCursorSide * MaxCursorSide
+)
