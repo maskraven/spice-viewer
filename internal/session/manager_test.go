@@ -6,8 +6,10 @@ package session_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -45,11 +47,27 @@ func (d *multiPipeDialer) DialSPICE(ctx context.Context, ep connector.Endpoint) 
 	return c, nil
 }
 
+// childLinkOpts configures a mock child link server.
+type childLinkOpts struct {
+	pubDER       []byte
+	priv         *rsa.PrivateKey
+	password     []byte
+	captureMess  **protocol.LinkMess
+	encryptCount *atomic.Int32
+	// ciphertexts, if non-nil, appends a copy of each accepted auth ciphertext.
+	ciphertexts *struct {
+		mu  sync.Mutex
+		all [][]byte
+	}
+	// wrongPriv, if set, is used to assert that ciphertext does NOT decrypt with
+	// a different channel's key (proves per-pubkey encrypt).
+	wrongPriv *rsa.PrivateKey
+}
+
 // runChildLinkServer completes one child link handshake and records LinkMess.
 // After link OK the server side stays open until closed (no further messages).
-func runChildLinkServer(t *testing.T, conn net.Conn, pubDER []byte, priv *rsa.PrivateKey, password []byte, capture **protocol.LinkMess, encryptCount *atomic.Int32) error {
+func runChildLinkServer(t *testing.T, conn net.Conn, opts childLinkOpts) error {
 	t.Helper()
-	// Do not close conn here — session owns the client side; test closes server.
 	hdr, err := protocol.ReadLinkHeader(conn)
 	if err != nil {
 		return fmt.Errorf("child read header: %w", err)
@@ -65,13 +83,13 @@ func runChildLinkServer(t *testing.T, conn net.Conn, pubDER []byte, priv *rsa.Pr
 	if err != nil {
 		return err
 	}
-	if capture != nil {
-		*capture = mess
+	if opts.captureMess != nil {
+		*opts.captureMess = mess
 	}
 
 	reply := &protocol.LinkReply{
 		Error:      protocol.LinkErrOK,
-		PubKey:     pubDER,
+		PubKey:     opts.pubDER,
 		CommonCaps: protocol.Phase1CommonCaps(),
 	}
 	pkt, err := reply.EncodePacket()
@@ -90,7 +108,12 @@ func runChildLinkServer(t *testing.T, conn net.Conn, pubDER []byte, priv *rsa.Pr
 	if err != nil {
 		return err
 	}
-	plain, err := rsa.DecryptOAEP(sha1.New(), nil, priv, auth.Ciphertext, nil)
+	if opts.wrongPriv != nil {
+		if _, err := rsa.DecryptOAEP(sha1.New(), nil, opts.wrongPriv, auth.Ciphertext, nil); err == nil {
+			return fmt.Errorf("ciphertext decrypted with wrong channel key (reuse?)")
+		}
+	}
+	plain, err := rsa.DecryptOAEP(sha1.New(), nil, opts.priv, auth.Ciphertext, nil)
 	if err != nil {
 		_ = protocol.WriteLinkResult(conn, protocol.LinkErrPermissionDenied)
 		return fmt.Errorf("decrypt: %w", err)
@@ -98,12 +121,18 @@ func runChildLinkServer(t *testing.T, conn net.Conn, pubDER []byte, priv *rsa.Pr
 	if len(plain) > 0 && plain[len(plain)-1] == 0 {
 		plain = plain[:len(plain)-1]
 	}
-	if !bytes.Equal(plain, password) {
+	if !bytes.Equal(plain, opts.password) {
 		_ = protocol.WriteLinkResult(conn, protocol.LinkErrPermissionDenied)
 		return fmt.Errorf("password mismatch")
 	}
-	if encryptCount != nil {
-		encryptCount.Add(1)
+	if opts.encryptCount != nil {
+		opts.encryptCount.Add(1)
+	}
+	if opts.ciphertexts != nil {
+		ct := append([]byte(nil), auth.Ciphertext...)
+		opts.ciphertexts.mu.Lock()
+		opts.ciphertexts.all = append(opts.ciphertexts.all, ct)
+		opts.ciphertexts.mu.Unlock()
 	}
 	return protocol.WriteLinkResult(conn, protocol.LinkErrOK)
 }
@@ -226,11 +255,27 @@ func runMockLinkServerKeepOpen(t *testing.T, conn net.Conn, opts mockLinkOpts) e
 }
 
 func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
-	pubDER, priv := loadTicketKey(t)
+	// Distinct RSA keys per channel: each mock server only decrypts its own blob.
+	mainDER, mainPriv := loadTicketKey(t)
+	dispDER, dispPriv := genSpiceTicketKey(t)
+	inDER, inPriv := genSpiceTicketKey(t)
+	curDER, curPriv := genSpiceTicketKey(t)
+
+	// Map for child servers: dial order 1..3 gets keys assigned when LinkMess type known.
+	// Each server uses a key selected by channel type from this table.
+	keyByType := map[uint8]struct {
+		der  []byte
+		priv *rsa.PrivateKey
+	}{
+		protocol.ChannelDisplay: {dispDER, dispPriv},
+		protocol.ChannelInputs:  {inDER, inPriv},
+		protocol.ChannelCursor:  {curDER, curPriv},
+	}
+
 	password := []byte("ticket-secret")
 	const sessionID uint32 = 0x0a0b0c0d
 
-	// Pipes: [0]=main, [1]=display, [2]=inputs, [3]=cursor
+	// Pipes: [0]=main, [1..3]=children (any order)
 	clients := make([]net.Conn, 4)
 	servers := make([]net.Conn, 4)
 	for i := 0; i < 4; i++ {
@@ -249,9 +294,11 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 	var (
 		mainMess *protocol.LinkMess
 		encrypts atomic.Int32
+		cts      = &struct {
+			mu  sync.Mutex
+			all [][]byte
+		}{}
 	)
-	// Child servers are bound to fixed dial order: dial 0 main, then parallel children
-	// may dial in any order among 1..3. Capture by channel type instead.
 
 	childByType := struct {
 		mu   sync.Mutex
@@ -260,11 +307,11 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 
 	errCh := make(chan error, 8)
 
-	// Main: link + MAIN_INIT + list
+	// Main: link + MAIN_INIT + list (vector key)
 	go func() {
 		if err := runMockLinkServerKeepOpen(t, servers[0], mockLinkOpts{
-			pubDER:        pubDER,
-			priv:          priv,
+			pubDER:        mainDER,
+			priv:          mainPriv,
 			expectedPass:  password,
 			checkPassword: true,
 			captureMess:   &mainMess,
@@ -272,7 +319,7 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 			errCh <- fmt.Errorf("main link: %w", err)
 			return
 		}
-		encrypts.Add(1) // main encrypt
+		encrypts.Add(1)
 		if err := serveMainPostLink(t, servers[0], sessionID, defaultChannelList()); err != nil {
 			errCh <- fmt.Errorf("main post-link: %w", err)
 			return
@@ -280,18 +327,11 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 		errCh <- nil
 	}()
 
-	// Child servers on pipes 1..3 (dial order = open order; parallel)
+	// Child servers: decrypt only with that channel type's key; wrongPriv = main key.
 	for i := 1; i < 4; i++ {
 		i := i
 		go func() {
-			var captured *protocol.LinkMess
-			err := runChildLinkServer(t, servers[i], pubDER, priv, password, &captured, &encrypts)
-			if captured != nil {
-				childByType.mu.Lock()
-				childByType.mess[captured.ChannelType] = captured
-				childByType.mu.Unlock()
-			}
-			errCh <- err
+			errCh <- runChildLinkServerByType(t, servers[i], keyByType, mainPriv, password, &childByType, &encrypts, cts)
 		}()
 	}
 
@@ -305,7 +345,7 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := s.DialMain(ctx); err != nil {
@@ -313,6 +353,9 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 	}
 	if err := s.OpenChannels(ctx); err != nil {
 		t.Fatalf("OpenChannels: %v", err)
+	}
+	if !s.ChannelsReady() {
+		t.Fatal("expected ChannelsReady")
 	}
 
 	if s.ConnectionID() != sessionID {
@@ -326,19 +369,30 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 		t.Fatalf("unexpected cursor error: %v", s.CursorError())
 	}
 
-	// Main mess connection_id=0
 	if mainMess == nil || mainMess.ConnectionID != 0 {
 		t.Fatalf("main mess=%+v", mainMess)
 	}
 
-	// Children: session_id + correct types; no playback opened (only 4 dials total)
 	if dialer.dials.Load() != 4 {
 		t.Fatalf("dials=%d want 4 (main+display+inputs+cursor)", dialer.dials.Load())
 	}
-	// encrypts: main + 3 children
 	if encrypts.Load() != 4 {
 		t.Fatalf("encrypt/auth count=%d want 4", encrypts.Load())
 	}
+
+	// All child ciphertexts must be distinct (fresh OAEP encrypt per channel).
+	cts.mu.Lock()
+	if len(cts.all) != 3 {
+		t.Fatalf("child ciphertexts=%d want 3", len(cts.all))
+	}
+	for i := 0; i < len(cts.all); i++ {
+		for j := i + 1; j < len(cts.all); j++ {
+			if bytes.Equal(cts.all[i], cts.all[j]) {
+				t.Fatal("duplicate ciphertext across channels (must re-encrypt per pubkey)")
+			}
+		}
+	}
+	cts.mu.Unlock()
 
 	childByType.mu.Lock()
 	defer childByType.mu.Unlock()
@@ -358,12 +412,136 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 		t.Fatal("playback must not be opened")
 	}
 
-	// Drain server errors
 	for i := 0; i < 4; i++ {
 		if err := <-errCh; err != nil {
 			t.Fatalf("server: %v", err)
 		}
 	}
+}
+
+// genSpiceTicketKey generates a 1024-bit RSA key whose SPKI DER is exactly
+// SpiceLinkPubKeyBytes (162), as required by the Phase-1 link parser.
+func genSpiceTicketKey(t *testing.T) (pubDER []byte, priv *rsa.PrivateKey) {
+	t.Helper()
+	for attempt := 0; attempt < 32; attempt++ {
+		k, err := rsa.GenerateKey(rand.Reader, 1024)
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, err := x509.MarshalPKIXPublicKey(&k.PublicKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(der) == protocol.SpiceLinkPubKeyBytes {
+			return der, k
+		}
+	}
+	t.Fatalf("could not generate 1024-bit RSA SPKI of length %d", protocol.SpiceLinkPubKeyBytes)
+	return nil, nil
+}
+
+// runChildLinkServerByType reads LinkMess, picks pubkey by channel type, and validates auth.
+func runChildLinkServerByType(
+	t *testing.T,
+	conn net.Conn,
+	keyByType map[uint8]struct {
+		der  []byte
+		priv *rsa.PrivateKey
+	},
+	wrongPriv *rsa.PrivateKey,
+	password []byte,
+	childByType *struct {
+		mu   sync.Mutex
+		mess map[uint8]*protocol.LinkMess
+	},
+	encryptCount *atomic.Int32,
+	cts *struct {
+		mu  sync.Mutex
+		all [][]byte
+	},
+) error {
+	t.Helper()
+	hdr, err := protocol.ReadLinkHeader(conn)
+	if err != nil {
+		return err
+	}
+	body := make([]byte, hdr.Size)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return err
+	}
+	mess, err := protocol.DecodeLinkMess(body)
+	if err != nil {
+		return err
+	}
+	childByType.mu.Lock()
+	childByType.mess[mess.ChannelType] = mess
+	childByType.mu.Unlock()
+
+	k, ok := keyByType[mess.ChannelType]
+	if !ok {
+		return fmt.Errorf("unexpected channel type %d", mess.ChannelType)
+	}
+	return finishChildLinkAfterMess(t, conn, k.der, k.priv, wrongPriv, password, encryptCount, cts)
+}
+
+// finishChildLinkAfterMess writes LinkReply and validates AuthSpice (LinkMess already read).
+func finishChildLinkAfterMess(
+	t *testing.T,
+	conn net.Conn,
+	pubDER []byte,
+	priv *rsa.PrivateKey,
+	wrongPriv *rsa.PrivateKey,
+	password []byte,
+	encryptCount *atomic.Int32,
+	cts *struct {
+		mu  sync.Mutex
+		all [][]byte
+	},
+) error {
+	t.Helper()
+	reply := &protocol.LinkReply{Error: protocol.LinkErrOK, PubKey: pubDER, CommonCaps: protocol.Phase1CommonCaps()}
+	pkt, err := reply.EncodePacket()
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(pkt); err != nil {
+		return err
+	}
+	authBuf := make([]byte, 4+protocol.SpiceTicketCiphertextLen)
+	if _, err := io.ReadFull(conn, authBuf); err != nil {
+		return err
+	}
+	auth, err := protocol.DecodeAuthSpice(authBuf)
+	if err != nil {
+		return err
+	}
+	if wrongPriv != nil {
+		if _, err := rsa.DecryptOAEP(sha1.New(), nil, wrongPriv, auth.Ciphertext, nil); err == nil {
+			return fmt.Errorf("ciphertext decrypted with wrong channel key")
+		}
+	}
+	plain, err := rsa.DecryptOAEP(sha1.New(), nil, priv, auth.Ciphertext, nil)
+	if err != nil {
+		_ = protocol.WriteLinkResult(conn, protocol.LinkErrPermissionDenied)
+		return fmt.Errorf("decrypt with channel key: %w", err)
+	}
+	if len(plain) > 0 && plain[len(plain)-1] == 0 {
+		plain = plain[:len(plain)-1]
+	}
+	if !bytes.Equal(plain, password) {
+		_ = protocol.WriteLinkResult(conn, protocol.LinkErrPermissionDenied)
+		return fmt.Errorf("password mismatch")
+	}
+	if encryptCount != nil {
+		encryptCount.Add(1)
+	}
+	if cts != nil {
+		ct := append([]byte(nil), auth.Ciphertext...)
+		cts.mu.Lock()
+		cts.all = append(cts.all, ct)
+		cts.mu.Unlock()
+	}
+	return protocol.WriteLinkResult(conn, protocol.LinkErrOK)
 }
 
 func TestOpenChannels_CursorFailureNonFatal(t *testing.T) {
@@ -588,6 +766,20 @@ func TestOpenChannels_DisplayFailureFatal(t *testing.T) {
 	if s.DisplayConn() != nil || s.InputsConn() != nil {
 		t.Fatal("partial children should not be retained on fatal failure")
 	}
+	if s.ConnectionID() != 0 {
+		t.Fatalf("ConnectionID should stay 0 after failed open, got %#x", s.ConnectionID())
+	}
+	if s.ChannelsReady() {
+		t.Fatal("ChannelsReady after failed open")
+	}
+	// One-shot: retry must fail cleanly (not "already opened" success path).
+	err2 := s.OpenChannels(ctx)
+	if err2 == nil {
+		t.Fatal("expected second OpenChannels to fail")
+	}
+	if !bytes.Contains([]byte(err2.Error()), []byte("previously failed")) {
+		t.Fatalf("second open error = %v, want previously failed", err2)
+	}
 
 	// Drain servers (some may error on early close)
 	for i := 0; i < 4; i++ {
@@ -761,16 +953,47 @@ func TestOpenChannels_MissingDisplayInList_Fatal(t *testing.T) {
 	<-errCh
 }
 
-func TestClose_OrderNoPanic(t *testing.T) {
+// closeTrackConn records Close() order under a shared tracker once named.
+type closeTrackConn struct {
+	net.Conn
+	name   atomic.Value // string
+	tr     *closeOrderTracker
+	closed atomic.Bool
+}
+
+type closeOrderTracker struct {
+	mu  sync.Mutex
+	seq []string
+}
+
+func (c *closeTrackConn) Close() error {
+	if c.closed.Swap(true) {
+		return net.ErrClosed
+	}
+	if n, ok := c.name.Load().(string); ok && n != "" {
+		c.tr.mu.Lock()
+		c.tr.seq = append(c.tr.seq, n)
+		c.tr.mu.Unlock()
+	}
+	return c.Conn.Close()
+}
+
+func (c *closeTrackConn) SetName(n string) { c.name.Store(n) }
+
+func TestClose_OrderAsserted(t *testing.T) {
 	pubDER, priv := loadTicketKey(t)
 	password := []byte("p")
 	const sessionID uint32 = 11
 
+	tr := &closeOrderTracker{}
 	clients := make([]net.Conn, 4)
 	servers := make([]net.Conn, 4)
+	tracked := make([]*closeTrackConn, 4)
 	for i := 0; i < 4; i++ {
 		c, s := net.Pipe()
-		clients[i], servers[i] = c, s
+		tc := &closeTrackConn{Conn: c, tr: tr}
+		tracked[i] = tc
+		clients[i], servers[i] = tc, s
 	}
 
 	errCh := make(chan error, 8)
@@ -786,7 +1009,9 @@ func TestClose_OrderNoPanic(t *testing.T) {
 	for i := 1; i < 4; i++ {
 		i := i
 		go func() {
-			errCh <- runChildLinkServer(t, servers[i], pubDER, priv, password, nil, nil)
+			errCh <- runChildLinkServer(t, servers[i], childLinkOpts{
+				pubDER: pubDER, priv: priv, password: password,
+			})
 		}()
 	}
 
@@ -807,14 +1032,48 @@ func TestClose_OrderNoPanic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Close should not panic; double Close ok.
+	// Label by identity after open (dial order ≠ channel type order for children).
+	if tc, ok := s.MainConn().(*closeTrackConn); ok {
+		tc.SetName("main")
+	} else {
+		t.Fatal("main not tracked")
+	}
+	if tc, ok := s.DisplayConn().(*closeTrackConn); ok {
+		tc.SetName("display")
+	} else {
+		t.Fatal("display not tracked")
+	}
+	if tc, ok := s.InputsConn().(*closeTrackConn); ok {
+		tc.SetName("inputs")
+	} else {
+		t.Fatal("inputs not tracked")
+	}
+	if tc, ok := s.CursorConn().(*closeTrackConn); ok {
+		tc.SetName("cursor")
+	} else {
+		t.Fatal("cursor not tracked")
+	}
+
 	if err := s.Close(); err != nil {
-		// net.Pipe close may return error if already closed by peer; ignore class.
 		t.Logf("Close: %v", err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
+
+	want := []string{"inputs", "display", "cursor", "main"}
+	tr.mu.Lock()
+	got := append([]string(nil), tr.seq...)
+	tr.mu.Unlock()
+	if len(got) != len(want) {
+		t.Fatalf("close order %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("close order %v want %v", got, want)
+		}
+	}
+
 	if s.Linked() {
 		t.Fatal("linked after close")
 	}
@@ -822,13 +1081,13 @@ func TestClose_OrderNoPanic(t *testing.T) {
 		t.Fatal("conns should be nil after close")
 	}
 
-	// Close server sides
 	for i := 0; i < 4; i++ {
 		_ = servers[i].Close()
 	}
 	for i := 0; i < 4; i++ {
 		<-errCh
 	}
+	_ = tracked
 }
 
 func TestClose_PartialSessionNoPanic(t *testing.T) {
@@ -873,5 +1132,194 @@ func TestOpenChannels_RequiresMainLinked(t *testing.T) {
 	err = s.OpenChannels(context.Background())
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestOpenChannels_MissingInputsInList_Fatal(t *testing.T) {
+	pubDER, priv := loadTicketKey(t)
+	password := []byte("p")
+
+	c, s := net.Pipe()
+	defer c.Close()
+	defer s.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := runMockLinkServerKeepOpen(t, s, mockLinkOpts{
+			pubDER: pubDER, priv: priv, expectedPass: password, checkPassword: true,
+		}); err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- serveMainPostLink(t, s, 1, []protocol.ChannelID{
+			{Type: protocol.ChannelDisplay, ID: 0},
+			{Type: protocol.ChannelCursor, ID: 0},
+		})
+	}()
+
+	sess, err := session.New(session.Config{
+		Endpoint: connector.Endpoint{Host: "h", Port: 1, AllowCleartext: true},
+		Password: password,
+		Dialer:   &multiPipeDialer{conns: []net.Conn{c}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	if err := sess.DialMain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	err = sess.OpenChannels(context.Background())
+	if err == nil {
+		t.Fatal("expected missing inputs error")
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("INPUTS")) {
+		t.Fatalf("error should mention INPUTS: %v", err)
+	}
+	if sess.ConnectionID() != 0 || sess.ChannelsReady() {
+		t.Fatal("failed open must not publish connectionID/ready")
+	}
+	// One-shot failed state.
+	if err2 := sess.OpenChannels(context.Background()); err2 == nil {
+		t.Fatal("expected second open fail")
+	}
+	<-errCh
+}
+
+func TestOpenChannels_NoCursorInList_OK(t *testing.T) {
+	pubDER, priv := loadTicketKey(t)
+	password := []byte("p")
+	const sessionID uint32 = 42
+
+	// main + display + inputs only
+	clients := make([]net.Conn, 3)
+	servers := make([]net.Conn, 3)
+	for i := 0; i < 3; i++ {
+		c, s := net.Pipe()
+		clients[i], servers[i] = c, s
+	}
+	defer func() {
+		for i := 0; i < 3; i++ {
+			_ = clients[i].Close()
+			_ = servers[i].Close()
+		}
+	}()
+
+	errCh := make(chan error, 4)
+	go func() {
+		if err := runMockLinkServerKeepOpen(t, servers[0], mockLinkOpts{
+			pubDER: pubDER, priv: priv, expectedPass: password, checkPassword: true,
+		}); err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- serveMainPostLink(t, servers[0], sessionID, []protocol.ChannelID{
+			{Type: protocol.ChannelDisplay, ID: 0},
+			{Type: protocol.ChannelInputs, ID: 0},
+			{Type: protocol.ChannelPlayback, ID: 0}, // ignored
+		})
+	}()
+	for i := 1; i < 3; i++ {
+		i := i
+		go func() {
+			errCh <- runChildLinkServer(t, servers[i], childLinkOpts{
+				pubDER: pubDER, priv: priv, password: password,
+			})
+		}()
+	}
+
+	sess, err := session.New(session.Config{
+		Endpoint: connector.Endpoint{Host: "h", Port: 1, AllowCleartext: true},
+		Password: password,
+		Dialer:   &multiPipeDialer{conns: clients},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	ctx := context.Background()
+	if err := sess.DialMain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.OpenChannels(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !sess.ChannelsReady() {
+		t.Fatal("ready")
+	}
+	if sess.DisplayConn() == nil || sess.InputsConn() == nil {
+		t.Fatal("display/inputs required")
+	}
+	if sess.CursorConn() != nil {
+		t.Fatal("cursor should be absent when not in list")
+	}
+	if sess.CursorError() != nil {
+		t.Fatalf("CursorError should be nil when cursor not listed: %v", sess.CursorError())
+	}
+	for i := 0; i < 3; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("server: %v", err)
+		}
+	}
+}
+
+func TestOpenChannels_ConcurrentRejected(t *testing.T) {
+	pubDER, priv := loadTicketKey(t)
+	password := []byte("p")
+
+	// Hang main after link so first OpenChannels blocks in readMainInitAndChannels.
+	c, s := net.Pipe()
+	defer c.Close()
+	defer s.Close()
+
+	go func() {
+		_ = runMockLinkServerKeepOpen(t, s, mockLinkOpts{
+			pubDER: pubDER, priv: priv, expectedPass: password, checkPassword: true,
+		})
+		// Never send MAIN_INIT — first OpenChannels blocks on ReadMessage.
+		buf := make([]byte, 1)
+		_, _ = s.Read(buf)
+	}()
+
+	sess, err := session.New(session.Config{
+		Endpoint: connector.Endpoint{Host: "h", Port: 1, AllowCleartext: true},
+		Password: password,
+		Dialer:   &multiPipeDialer{conns: []net.Conn{c}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	if err := sess.DialMain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	err1 := make(chan error, 1)
+	go func() {
+		close(started)
+		err1 <- sess.OpenChannels(context.Background())
+	}()
+	<-started
+	// Give first call time to take openInProgress.
+	time.Sleep(30 * time.Millisecond)
+
+	err2 := sess.OpenChannels(context.Background())
+	if err2 == nil {
+		t.Fatal("expected concurrent OpenChannels rejection")
+	}
+	if !bytes.Contains([]byte(err2.Error()), []byte("in progress")) {
+		t.Fatalf("want in progress, got %v", err2)
+	}
+
+	// Unblock first OpenChannels via Close (cancels lifeCtx).
+	_ = sess.Close()
+	select {
+	case <-err1:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first OpenChannels did not return after Close")
 	}
 }

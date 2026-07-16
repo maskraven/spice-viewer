@@ -19,6 +19,17 @@ import (
 // maxParallelChildOpens bounds concurrent child dial+link work (design: 4–8).
 const maxParallelChildOpens = 6
 
+// openState is the OpenChannels lifecycle latch (not concurrent-safe re-entry).
+// connectionID alone is never used as the success latch.
+type openState int
+
+const (
+	openIdle openState = iota
+	openInProgress
+	openReady  // children open successfully
+	openFailed // terminal until Close; MAIN_INIT/list already consumed on wire
+)
+
 // OpenChannels reads MAIN_INIT and CHANNELS_LIST on the linked main channel,
 // then opens Phase-1 child channels in parallel:
 //
@@ -30,6 +41,10 @@ const maxParallelChildOpens = 6
 // Prerequisites: main link complete (DialMain / LinkMain). Children use
 // connection_id = session_id from MAIN_INIT and a fresh ticket encrypt per
 // channel public key.
+//
+// OpenChannels is single-flight: concurrent calls are rejected. It is one-shot
+// per Session — success or failure both prevent a second open (main has already
+// consumed ATTACH_CHANNELS / CHANNELS_LIST; create a new Session to retry).
 func (s *Session) OpenChannels(ctx context.Context) error {
 	if s == nil {
 		return ux.New(ux.ClassInternal, ux.MsgInternal, fmt.Errorf("session: nil Session"))
@@ -47,13 +62,45 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 		s.mu.Unlock()
 		return ux.New(ux.ClassInternal, ux.MsgInternal, fmt.Errorf("session: main not linked"))
 	}
-	if s.connectionID != 0 {
+	switch s.openState {
+	case openInProgress:
 		s.mu.Unlock()
-		return ux.New(ux.ClassInternal, ux.MsgInternal, fmt.Errorf("session: channels already opened"))
+		return ux.New(ux.ClassInternal, ux.MsgInternal,
+			fmt.Errorf("session: OpenChannels already in progress"))
+	case openReady:
+		s.mu.Unlock()
+		return ux.New(ux.ClassInternal, ux.MsgInternal,
+			fmt.Errorf("session: channels already opened"))
+	case openFailed:
+		s.mu.Unlock()
+		return ux.New(ux.ClassInternal, ux.MsgInternal,
+			fmt.Errorf("session: channel open previously failed; close and create a new session"))
 	}
+	s.openState = openInProgress
 	main := s.mainConn
 	lifeCtx := s.lifeCtx
 	s.mu.Unlock()
+
+	// Terminal failure unless we reach openReady.
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		s.mu.Lock()
+		if s.openState == openInProgress {
+			s.openState = openFailed
+			// Do not publish partial children or connectionID on failure.
+			s.displayConn = nil
+			s.inputsConn = nil
+			s.cursorConn = nil
+			s.cursorErr = nil
+			s.connectionID = 0
+			s.mainInit = nil
+			s.channelList = nil
+		}
+		s.mu.Unlock()
+	}()
 
 	// Combine caller ctx with session lifetime (Close cancels lifeCtx).
 	ctx, cancel := context.WithCancel(ctx)
@@ -71,16 +118,8 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 			fmt.Errorf("session: MAIN_INIT session_id is 0"))
 	}
 
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return ux.New(ux.ClassInternal, ux.MsgInternal, fmt.Errorf("session: closed during main init"))
-	}
-	s.connectionID = init.SessionID
-	s.mainInit = &init
-	s.channelList = append([]protocol.ChannelID(nil), list.Channels...)
-	connID := s.connectionID
-	s.mu.Unlock()
+	// Keep session_id local until children succeed (connectionID is not a success latch).
+	connID := init.SessionID
 
 	want := selectPhase1Channels(list.Channels)
 	if want.display == nil {
@@ -136,13 +175,14 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 						fatalErr = err
 					}
 					mu.Unlock()
+					cancel() // stop siblings
 				} else if job.errOut != nil {
 					*job.errOut = err
 				}
 				return
 			}
 
-			// Refuse new opens after Close.
+			// Refuse new opens after Close or sibling cancel.
 			s.mu.Lock()
 			closed := s.closed
 			s.mu.Unlock()
@@ -157,6 +197,7 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 						fatalErr = err
 					}
 					mu.Unlock()
+					cancel()
 				} else if job.errOut != nil {
 					*job.errOut = err
 				}
@@ -171,8 +212,28 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 						fatalErr = err
 					}
 					mu.Unlock()
+					// Cancel sibling opens (including best-effort cursor) on fatal failure.
+					cancel()
 				} else if job.errOut != nil {
 					*job.errOut = err
+				}
+				return
+			}
+
+			// If a fatal sibling already failed, drop this conn immediately.
+			mu.Lock()
+			failed := fatalErr != nil
+			mu.Unlock()
+			if failed || ctx.Err() != nil {
+				_ = conn.Close()
+				if job.fatal {
+					mu.Lock()
+					if fatalErr == nil {
+						fatalErr = mapTransportErr(context.Canceled)
+					}
+					mu.Unlock()
+				} else if job.errOut != nil && *job.errOut == nil {
+					*job.errOut = mapTransportErr(context.Canceled)
 				}
 				return
 			}
@@ -203,12 +264,20 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 				_ = c.Close()
 			}
 		}
+		// defer marks openFailed
 		return ux.New(ux.ClassInternal, ux.MsgInternal, fmt.Errorf("session: closed during child open"))
 	}
+	// Publish only on full success.
+	s.connectionID = connID
+	initCopy := init
+	s.mainInit = &initCopy
+	s.channelList = append([]protocol.ChannelID(nil), list.Channels...)
 	s.displayConn = displayConn
 	s.inputsConn = inputsConn
 	s.cursorConn = cursorConn
 	s.cursorErr = cursorErr
+	s.openState = openReady
+	success = true
 	return nil
 }
 
@@ -288,11 +357,10 @@ func (s *Session) dialAndLinkChild(ctx context.Context, connectionID uint32, ch 
 // so a chatty server cannot block child opens.
 func readMainInitAndChannels(ctx context.Context, main net.Conn) (protocol.MainInit, protocol.ChannelsList, error) {
 	var (
-		init       protocol.MainInit
-		list       protocol.ChannelsList
-		haveInit   bool
-		haveList   bool
-		attachSent bool
+		init     protocol.MainInit
+		list     protocol.ChannelsList
+		haveInit bool
+		haveList bool
 	)
 
 	release, err := bindConnToContext(ctx, main)
@@ -326,7 +394,6 @@ func readMainInitAndChannels(ctx context.Context, main net.Conn) (protocol.MainI
 			if err := protocol.WriteMessage(main, protocol.MsgcMainAttachChannels, nil); err != nil {
 				return init, list, mapLinkIOErr(ctx, fmt.Errorf("session: write ATTACH_CHANNELS: %w", err))
 			}
-			attachSent = true
 
 		case protocol.MsgMainChannelsList:
 			if !haveInit {
@@ -359,9 +426,5 @@ func readMainInitAndChannels(ctx context.Context, main net.Conn) (protocol.MainI
 		}
 	}
 
-	if !attachSent {
-		// Defensive: always true if haveInit; keep compiler happy.
-		_ = attachSent
-	}
 	return init, list, nil
 }

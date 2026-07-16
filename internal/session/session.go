@@ -56,7 +56,9 @@ type Session struct {
 	linked   bool // true after successful main link; mini-header framing applies
 	closed   bool
 
-	connectionID uint32 // session_id from MAIN_INIT; 0 until init
+	// connectionID is session_id from MAIN_INIT; published only after successful
+	// OpenChannels (not used as the open success latch — see openState).
+	connectionID uint32
 	mainInit     *protocol.MainInit
 	channelList  []protocol.ChannelID
 
@@ -64,6 +66,9 @@ type Session struct {
 	inputsConn  net.Conn
 	cursorConn  net.Conn
 	cursorErr   error // non-nil if best-effort cursor open failed
+
+	// openState serializes OpenChannels and distinguishes idle/ready/failed.
+	openState openState
 
 	// openSem limits concurrent child dial+link operations.
 	openSem chan struct{}
@@ -193,7 +198,8 @@ func (s *Session) Linked() bool {
 	return s.linked
 }
 
-// ConnectionID returns the SPICE session_id from MAIN_INIT (0 until OpenChannels).
+// ConnectionID returns the SPICE session_id from MAIN_INIT after a successful
+// OpenChannels (0 if open has not succeeded). A failed OpenChannels leaves 0.
 func (s *Session) ConnectionID() uint32 {
 	if s == nil {
 		return 0
@@ -201,6 +207,17 @@ func (s *Session) ConnectionID() uint32 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.connectionID
+}
+
+// ChannelsReady reports whether OpenChannels completed successfully
+// (display+inputs linked; cursor may be degraded).
+func (s *Session) ChannelsReady() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.openState == openReady
 }
 
 // DisplayConn returns the linked display channel connection, or nil.
@@ -246,9 +263,14 @@ func (s *Session) CursorError() error {
 // Close tears down channels in design order and wipes the session password.
 //
 //  1. cancel session context (stop new opens)
-//  2. wait briefly for in-flight opens
-//  3. close inputs, display, cursor, main
+//  2. wait for in-flight OpenChannels (timeout) so mid-link work exits before
+//     we close sockets it may still be using
+//  3. close inputs → display → cursor → main
 //  4. wipe password
+//
+// Waiting before channel close (vs after) is intentional: cancel unblocks open
+// work via lifeCtx; closing sockets only after openWG settles avoids racing
+// link handshakes that still hold the conn. Matches docs Close() ordering.
 //
 // Safe to call multiple times; does not panic if partially open.
 func (s *Session) Close() error {
@@ -263,6 +285,7 @@ func (s *Session) Close() error {
 	}
 	s.closed = true
 	s.linked = false
+	s.openState = openIdle // session is dead; not re-openable either way
 	cancel := s.lifeCancel
 	inputs := s.inputsConn
 	display := s.displayConn
@@ -272,6 +295,7 @@ func (s *Session) Close() error {
 	s.displayConn = nil
 	s.cursorConn = nil
 	s.mainConn = nil
+	s.connectionID = 0
 	s.mu.Unlock()
 
 	// 1. cancel: stop accepting new channel opens
@@ -279,7 +303,7 @@ func (s *Session) Close() error {
 		cancel()
 	}
 
-	// 2. stop opens: wait for in-flight OpenChannels work (bounded)
+	// 2. wait for in-flight OpenChannels (bounded) before tearing sockets.
 	done := make(chan struct{})
 	go func() {
 		s.openWG.Wait()

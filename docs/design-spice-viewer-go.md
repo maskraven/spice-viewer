@@ -512,15 +512,20 @@ SPICE uses **one TCP/TLS connection per channel**. Each channel repeats the full
 #### `Close()` ordering
 
 ```text
-1. cancel session context
-2. stop accepting new channel opens
+1. cancel session context (stops new channel opens via life context)
+2. wait for in-flight OpenChannels / child link work with timeout (e.g. 3s)
+   — wait *before* closing sockets so mid-link goroutines exit cleanly;
+     cancel unblocks blocked dial/link I/O
 3. close inputs (stop sending)
 4. close display, cursor
 5. close main
-6. wait errgroup with timeout (e.g. 3s)
-7. security.Wipe(password)
-8. release surfaces
+6. security.Wipe(password)
+7. release surfaces
 ```
+
+Note: waiting for in-flight opens before channel close (step 2) is intentional
+and preferred over “close then wait”: cancel already interrupts open work;
+closing sockets first races link handshakes that still own the conn.
 
 #### Ticket encryption (exact)
 
