@@ -1,3 +1,7 @@
+//go:build ignore
+
+// Throwaway verifier for M0 golden ticket vectors. Not production code.
+// Run: go run scratch/verify_vectors.go
 package main
 
 import (

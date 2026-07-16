@@ -1,4 +1,7 @@
+//go:build ignore
+
 // Throwaway generator for M0 golden ticket vectors. Not production code.
+// Run: go run scratch/gen_ticket_vector.go
 package main
 
 import (
