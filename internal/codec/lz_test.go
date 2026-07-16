@@ -167,14 +167,12 @@ func TestDecodeLZRGBBottomUpFlip(t *testing.T) {
 		0xff, 0x00, 0x00, 0xff,
 	}
 	stream := encodeLZRGB32Literals(1, 2, false, pixels)
-	img, err := codec.DecodeLZRGB(append(
-		func() []byte {
-			p := make([]byte, 4+len(stream))
-			binary.LittleEndian.PutUint32(p[:4], uint32(len(stream)))
-			copy(p[4:], stream)
-			return p
-		}(),
-	), 1, 2)
+	img, err := codec.DecodeLZRGB(func() []byte {
+		p := make([]byte, 4+len(stream))
+		binary.LittleEndian.PutUint32(p[:4], uint32(len(stream)))
+		copy(p[4:], stream)
+		return p
+	}(), 1, 2)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}

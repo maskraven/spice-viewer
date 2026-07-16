@@ -579,4 +579,3 @@ func decodeCursorPixels(typ uint8, w, h int, data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("cursor type %d not implemented", typ)
 	}
 }
-
