@@ -109,6 +109,35 @@ const (
 	MsgcFirstAvail       uint16 = 101
 )
 
+// Main channel server messages (spice/enums.h; start at MsgFirstAvail).
+const (
+	MsgMainMigrateBegin      uint16 = 101
+	MsgMainMigrateCancel     uint16 = 102
+	MsgMainInit              uint16 = 103 // SPICE_MSG_MAIN_INIT
+	MsgMainChannelsList      uint16 = 104 // SPICE_MSG_MAIN_CHANNELS_LIST
+	MsgMainMouseMode         uint16 = 105
+	MsgMainMultiMediaTime    uint16 = 106
+	MsgMainAgentConnected    uint16 = 107
+	MsgMainAgentDisconnected uint16 = 108
+	MsgMainAgentData         uint16 = 109
+	MsgMainAgentToken        uint16 = 110
+)
+
+// Main channel client messages.
+const (
+	MsgcMainClientInfo          uint16 = 101
+	MsgcMainMigrateConnected    uint16 = 102
+	MsgcMainMigrateConnectError uint16 = 103
+	MsgcMainAttachChannels      uint16 = 104 // SPICE_MSGC_MAIN_ATTACH_CHANNELS
+	MsgcMainMouseModeRequest    uint16 = 105
+	MsgcMainAgentStart          uint16 = 106
+	MsgcMainAgentData           uint16 = 107
+	MsgcMainAgentToken          uint16 = 108
+)
+
+// MainInitSize is sizeof(SpiceMsgMainInit): 8 × uint32.
+const MainInitSize = 32
+
 // MiniHeaderSize is sizeof(SpiceMiniDataHeader): type u16 + size u32.
 const MiniHeaderSize = 6
 
