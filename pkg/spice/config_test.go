@@ -176,6 +176,19 @@ func TestConnectConfigFromVV_NilFile(t *testing.T) {
 	}
 }
 
+func TestConnectConfigFromVV_NonSpiceType(t *testing.T) {
+	f := &vvfile.File{
+		Type:     "vnc",
+		Host:     "h",
+		Port:     5900,
+		Password: []byte("p"),
+	}
+	_, err := spice.ConnectConfigFromVV(f)
+	if err == nil {
+		t.Fatal("expected error for non-spice type")
+	}
+}
+
 func TestConnectConfigFromVV_EmptyProxy(t *testing.T) {
 	f := &vvfile.File{
 		Type:     "spice",

@@ -36,20 +36,28 @@ type Drivers struct {
 // ConnectConfig is the library entry configuration for a SPICE session.
 //
 // Password ownership:
-//   - Connect deep-copies Password (and CACertPEM) into session memory.
+//   - Connect deep-copies Password into session memory (sole owner after New).
 //   - Connect does NOT wipe the caller's Password slice (caller may reuse);
 //     use security.Wipe or zero the slice after Connect if desired.
-//   - Client.Close wipes the session-owned password copy.
+//   - Client.Close → session.Close wipes the session-owned password copy.
+//
+// CACertPEM is read when building the TLS endpoint (cert pool); Connect does
+// not retain or wipe a separate CA copy. Callers may wipe CACertPEM themselves
+// after Connect if desired. ConnectConfigFromVV deep-copies CA from the file
+// so the File and config do not share a backing array.
 //
 // No auto-reconnect is performed for ticket/password sessions (Phase 1).
 // AllowReconnect is reserved for a future lab-only path and is ignored today.
+//
+// Hotkeys and Fullscreen are for the UI layer; Client retains only Title.
+// Keep this config (or those fields) after Connect for hotkey handling.
 type ConnectConfig struct {
 	Host        string
 	Port        int // cleartext lab port (requires AllowCleartext when TLSPort==0)
 	TLSPort     int
-	Password    []byte // secret; copied on Connect, not wiped by Connect
+	Password    []byte // secret; copied into session on Connect, not wiped by Connect
 	ProxyURL    string // e.g. "http://proxy:3128"; empty = direct
-	CACertPEM   []byte // PEM; required when TLSPort is set
+	CACertPEM   []byte // PEM for TLS pool; not session-retained after dial setup
 	HostSubject string // OpenSSL-style DN pin (Proxmox); empty = DNS ServerName mode
 	Title       string
 	Hotkeys     HotkeyConfig

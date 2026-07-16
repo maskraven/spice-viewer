@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -342,7 +343,7 @@ func runMockLinkWithKey(t *testing.T, conn net.Conn, pubDER []byte, priv *rsa.Pr
 	return protocol.WriteLinkResult(conn, protocol.LinkErrOK)
 }
 
-func TestConnect_PasswordOwnershipCopyAndWipe(t *testing.T) {
+func TestConnect_PasswordOwnershipAndEvents(t *testing.T) {
 	password := []byte("ticket-secret-own")
 	clients, cleanup := startMockSessionServers(t, password, true)
 	defer cleanup()
@@ -369,16 +370,12 @@ func TestConnect_PasswordOwnershipCopyAndWipe(t *testing.T) {
 		t.Fatalf("Connect: %v", err)
 	}
 
-	// Caller slice is not wiped by Connect.
+	// Caller slice is not wiped by Connect (session holds its own copy).
 	if !bytes.Equal(cfg.Password, password) {
 		t.Fatalf("Connect wiped or mutated caller password: %q", cfg.Password)
 	}
-	// Mutating caller must not affect client copy.
+	// Mutating caller after Connect must be safe (session already linked).
 	cfg.Password[0] = 'X'
-	got := c.passwordCopy()
-	if !bytes.Equal(got, password) {
-		t.Fatalf("client password not independent copy: %q", got)
-	}
 	if c.Title() != "test-vm" {
 		t.Errorf("Title: %q", c.Title())
 	}
@@ -386,7 +383,7 @@ func TestConnect_PasswordOwnershipCopyAndWipe(t *testing.T) {
 		t.Fatal("Inputs() nil")
 	}
 
-	// Expect Connected event.
+	// First event is Connected (F5).
 	select {
 	case ev := <-c.Events():
 		if ev.Type != EventConnected {
@@ -400,18 +397,124 @@ func TestConnect_PasswordOwnershipCopyAndWipe(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Client password wiped.
-	wiped := c.passwordCopy()
-	if wiped != nil && len(wiped) > 0 {
-		for _, b := range wiped {
-			if b != 0 {
-				t.Fatalf("password not wiped after Close: %v", wiped)
+	// Clean Close → Disconnected with nil Err; events channel closed after.
+	var sawDisc bool
+	deadline := time.After(2 * time.Second)
+	for !sawDisc {
+		select {
+		case ev, ok := <-c.Events():
+			if !ok {
+				if !sawDisc {
+					t.Fatal("events closed before EventDisconnected")
+				}
+				break
 			}
+			if ev.Type == EventDisconnected {
+				sawDisc = true
+				if ev.Err != nil {
+					t.Fatalf("clean Close Disconnected err=%v", ev.Err)
+				}
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for EventDisconnected")
+		}
+		if sawDisc {
+			// Drain until channel closed.
+			for {
+				if _, ok := <-c.Events(); !ok {
+					break
+				}
+			}
+			break
 		}
 	}
+
 	// Double Close is safe.
 	if err := c.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestConnect_FatalPreservedAcrossClose(t *testing.T) {
+	// F4: recordDisconnectErr + Close must not erase a fatal with nil.
+	password := []byte("ticket-fatal")
+	clients, cleanup := startMockSessionServers(t, password, false) // no cursor
+	defer cleanup()
+
+	cfg := ConnectConfig{
+		Host:           "127.0.0.1",
+		Port:           5900,
+		AllowCleartext: true,
+		Password:       append([]byte(nil), password...),
+		Drivers:        Drivers{Display: NewNullDriver()},
+		dialer:         &multiPipeDialer{conns: clients},
+	}
+	c, err := Connect(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	// Drain Connected.
+	select {
+	case ev := <-c.Events():
+		if ev.Type != EventConnected {
+			t.Fatalf("want Connected, got %v", ev.Type)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Connected")
+	}
+
+	// Inject fatal as if a channel failed, then Close concurrently.
+	fatal := fmt.Errorf("spice: display channel closed: EOF")
+	c.recordDisconnectErr(fatal)
+	select {
+	case c.fatalCh <- fatal:
+	default:
+	}
+	c.lifeCancel()
+
+	// Close must not overwrite discErr with clean nil.
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Find Disconnected; must carry the fatal (classified possibly as Transport).
+	var disc Event
+	found := false
+	for {
+		ev, ok := <-c.Events()
+		if !ok {
+			break
+		}
+		if ev.Type == EventDisconnected {
+			disc = ev
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("missing EventDisconnected")
+	}
+	if disc.Err == nil {
+		t.Fatal("Close erased fatal disconnect error (F4 regression)")
+	}
+	if !strings.Contains(disc.Err.Error(), "display channel") &&
+		!strings.Contains(disc.Err.Error(), "Connection lost") {
+		t.Fatalf("unexpected disc err: %v", disc.Err)
+	}
+}
+
+func TestRecordDisconnectErr_FirstNonNilWins(t *testing.T) {
+	c := &Client{}
+	c.recordDisconnectErr(nil) // no-op
+	if c.disconnectErr() != nil {
+		t.Fatal("nil should not set discErr")
+	}
+	e1 := fmt.Errorf("first")
+	e2 := fmt.Errorf("second")
+	c.recordDisconnectErr(e1)
+	c.recordDisconnectErr(e2)
+	c.recordDisconnectErr(nil)
+	if c.disconnectErr() != e1 {
+		t.Fatalf("got %v want first", c.disconnectErr())
 	}
 }
 

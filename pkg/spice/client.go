@@ -28,6 +28,12 @@ const eventBuf = 16
 //
 // Create with Connect. There is no auto-reconnect for ticket sessions: on
 // disconnect, open a new connection file and call Connect again.
+//
+// Hotkeys and Fullscreen from ConnectConfig are not retained on Client — the UI
+// should keep the ConnectConfig (or those fields) for hotkey handling.
+//
+// The Connect dial/open context does not bound session lifetime after Connect
+// returns; cancel that context only aborts dial/open. Use Close to tear down.
 type Client struct {
 	mu sync.Mutex
 
@@ -46,24 +52,35 @@ type Client struct {
 	cursor  *channel.Cursor
 	pubIn   *Inputs
 
-	// password is a private copy for ownership (session also owns and wipes).
-	password []byte
-
 	closed     bool
 	disconnect sync.Once
 	wg         sync.WaitGroup
 
-	// fatalCh signals a fatal channel error to the supervisor.
+	// discMu protects discErr. Non-nil fatal errors always win over nil;
+	// the first non-nil error is kept (Close must not erase a peer failure).
+	discMu  sync.Mutex
+	discErr error
+
+	// fatalCh wakes the supervisor; discErr is the source of truth for the
+	// Disconnected event error.
 	fatalCh chan error
 }
 
 // Connect dials the SPICE peer described by cfg, completes main + child links,
 // starts display/inputs/cursor run loops, and returns a live Client.
 //
-// Password ownership: cfg.Password is deep-copied; the caller's slice is not
-// wiped. Client.Close wipes the private copy (and session.Close does likewise).
+// Password ownership:
+//   - cfg.Password is deep-copied into the session; the caller's slice is not wiped.
+//   - After session.New succeeds, only the session holds the ticket (local copy wiped).
+//   - Client.Close → session.Close wipes the session-owned copy.
 //
-// Phase 1: no auto-reconnect. AllowReconnect is ignored.
+// CACertPEM is used only to build a TLS cert pool during dial setup; it is not
+// retained or wiped by the Client (callers may wipe their own CACertPEM slice).
+//
+// Event order on success: EventConnected first, then any deferred EventError
+// (e.g. cursor open degrade). Disconnected is terminal; no auto-reconnect.
+//
+// Phase 1: AllowReconnect is ignored.
 func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -74,7 +91,7 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 		return nil, err
 	}
 
-	// Deep-copy secrets into client-owned memory before any network work.
+	// Deep-copy password for session.New; session makes its own private copy.
 	var pw []byte
 	if len(cfg.Password) > 0 {
 		pw = make([]byte, len(cfg.Password))
@@ -83,23 +100,22 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 
 	sess, err := session.New(session.Config{
 		Endpoint:       ep,
-		Password:       pw, // session makes its own copy
+		Password:       pw,
 		AllowCleartext: cfg.AllowCleartext || ep.AllowCleartext,
 		Dialer:         cfg.dialer,
 	})
+	// Session owns the secret from here on success; always drop the local copy.
+	security.Wipe(pw)
 	if err != nil {
-		security.Wipe(pw)
 		return nil, err
 	}
 
 	if err := sess.DialMain(ctx); err != nil {
 		_ = sess.Close()
-		security.Wipe(pw)
 		return nil, err
 	}
 	if err := sess.OpenChannels(ctx); err != nil {
 		_ = sess.Close()
-		security.Wipe(pw)
 		return nil, err
 	}
 
@@ -110,15 +126,13 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 		events:     make(chan Event, eventBuf),
 		lifeCtx:    lifeCtx,
 		lifeCancel: lifeCancel,
-		password:   pw,
 		fatalCh:    make(chan error, 1),
 	}
 
-	if err := c.startChannels(cfg.Drivers); err != nil {
+	cursorOpenErr, err := c.startChannels(cfg.Drivers)
+	if err != nil {
 		lifeCancel()
 		_ = sess.Close()
-		security.Wipe(pw)
-		c.password = nil
 		return nil, err
 	}
 
@@ -126,16 +140,21 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 	c.wg.Add(1)
 	go c.supervise()
 
+	// Connected first; then deferred non-fatal errors (F5).
 	c.emit(Event{Type: EventConnected})
+	if cursorOpenErr != nil {
+		c.emit(Event{Type: EventError, Err: cursorOpenErr})
+	}
 	return c, nil
 }
 
 // startChannels constructs display/inputs/cursor handlers and starts Run loops.
-func (c *Client) startChannels(drivers Drivers) error {
+// Returns a non-nil cursorOpenErr when cursor open failed (best-effort degrade).
+func (c *Client) startChannels(drivers Drivers) (cursorOpenErr error, err error) {
 	dispConn := c.sess.DisplayConn()
 	inpConn := c.sess.InputsConn()
 	if dispConn == nil || inpConn == nil {
-		return ux.New(ux.ClassInternal, ux.MsgInternal,
+		return nil, ux.New(ux.ClassInternal, ux.MsgInternal,
 			fmt.Errorf("spice: missing display or inputs connection after OpenChannels"))
 	}
 
@@ -156,19 +175,19 @@ func (c *Client) startChannels(drivers Drivers) error {
 		c.inputs.SetMouseMode(init.SupportedMouseModes, init.CurrentMouseMode)
 		// Prefer CLIENT mouse mode when the server supports it.
 		if main := c.sess.MainConn(); main != nil {
-			if _, err := c.inputs.RequestPreferredMouseMode(main); err != nil {
+			if _, reqErr := c.inputs.RequestPreferredMouseMode(main); reqErr != nil {
 				// Non-fatal: stay on current mode.
-				log.Printf("spice: mouse mode request: %v", err)
+				log.Printf("spice: mouse mode request: %v", reqErr)
 			}
 		}
 	}
 
-	// Cursor (best-effort; conn may be nil).
+	// Cursor (best-effort; conn may be nil). Defer EventError to after Connected.
 	curConn := c.sess.CursorConn()
 	if curConn != nil {
 		c.cursor = channel.NewCursor(curConn, asCursorDriver(drivers.Cursor))
-	} else if err := c.sess.CursorError(); err != nil {
-		c.emit(Event{Type: EventError, Err: err})
+	} else {
+		cursorOpenErr = c.sess.CursorError()
 	}
 
 	// Run loops.
@@ -197,7 +216,7 @@ func (c *Client) startChannels(drivers Drivers) error {
 		})
 	}
 
-	return nil
+	return cursorOpenErr, nil
 }
 
 // runFatal runs fn; on unexpected error signals session-fatal disconnect.
@@ -229,7 +248,27 @@ func (c *Client) runBestEffort(name string, fn func() error) {
 	c.emit(Event{Type: EventError, Err: err})
 }
 
+// recordDisconnectErr stores err for the eventual EventDisconnected.
+// Non-nil always wins over nil; the first non-nil error is kept.
+func (c *Client) recordDisconnectErr(err error) {
+	if err == nil {
+		return
+	}
+	c.discMu.Lock()
+	defer c.discMu.Unlock()
+	if c.discErr == nil {
+		c.discErr = err
+	}
+}
+
+func (c *Client) disconnectErr() error {
+	c.discMu.Lock()
+	defer c.discMu.Unlock()
+	return c.discErr
+}
+
 func (c *Client) signalFatal(err error) {
+	c.recordDisconnectErr(err)
 	select {
 	case c.fatalCh <- err:
 	default:
@@ -237,29 +276,44 @@ func (c *Client) signalFatal(err error) {
 	c.lifeCancel()
 }
 
-// supervise waits for fatal channel death or Close, then emits Disconnected.
+// supervise waits for fatal channel death or lifeCtx cancel (Close), then
+// emits a single EventDisconnected. discErr is preserved across Close races:
+// a pending fatal is never overwritten by a clean Close (F4).
 // No auto-reconnect.
 func (c *Client) supervise() {
 	defer c.wg.Done()
 	select {
 	case <-c.lifeCtx.Done():
-		var ferr error
 		select {
-		case ferr = <-c.fatalCh:
+		case err := <-c.fatalCh:
+			c.recordDisconnectErr(err)
 		default:
 		}
-		c.finishDisconnect(ferr)
+		c.finishDisconnect()
 	case err := <-c.fatalCh:
+		c.recordDisconnectErr(err)
 		c.lifeCancel()
-		c.finishDisconnect(err)
+		c.finishDisconnect()
 	}
 }
 
-func (c *Client) finishDisconnect(err error) {
+// finishDisconnect tears down the session and emits EventDisconnected once.
+// Safe from both supervise and Close (fallback); Once ensures a single emit.
+// The disconnect error is always taken from discErr (never a Close-passed nil).
+func (c *Client) finishDisconnect() {
 	c.disconnect.Do(func() {
+		// Final drain in case signalFatal raced with lifeCtx.Done.
+		select {
+		case err := <-c.fatalCh:
+			c.recordDisconnectErr(err)
+		default:
+		}
+
 		if c.sess != nil {
 			_ = c.sess.Close()
 		}
+
+		err := c.disconnectErr()
 		if err != nil {
 			classified := ux.Classify(err)
 			if classified != nil && classified.Class == ux.ClassInternal {
@@ -309,8 +363,9 @@ func (c *Client) runMain(ctx context.Context, main net.Conn) error {
 
 // Events returns the lifecycle event channel.
 //
-// The channel is closed after Close completes. Types: Connected, Disconnected,
-// Error. There is no auto-reconnect; Disconnected is terminal for this Client.
+// On a successful Connect the first event is EventConnected; EventError may
+// follow for non-fatal degrade (e.g. cursor open failure). EventDisconnected
+// is terminal. The channel is closed after Close completes. No auto-reconnect.
 func (c *Client) Events() <-chan Event {
 	if c == nil {
 		ch := make(chan Event)
@@ -331,6 +386,7 @@ func (c *Client) Inputs() *Inputs {
 }
 
 // Title returns the connection title from ConnectConfig (may be empty).
+// Hotkeys/Fullscreen are not stored on Client; keep ConnectConfig for those.
 func (c *Client) Title() string {
 	if c == nil {
 		return ""
@@ -364,10 +420,12 @@ func (c *Client) Wait(ctx context.Context) error {
 	}
 }
 
-// Close cancels run loops, closes the session (wiping the session password),
-// and wipes the client-owned password copy. Safe to call multiple times.
+// Close cancels run loops, closes the session (wiping the session-owned
+// password), and closes the Events channel. Safe to call multiple times.
 //
-// Does not auto-reconnect. After Close, the Client must not be reused.
+// If a fatal peer error was already recorded, EventDisconnected still carries
+// that error (Close does not overwrite it with a clean nil). No auto-reconnect.
+// After Close, the Client must not be reused.
 func (c *Client) Close() error {
 	if c == nil {
 		return nil
@@ -381,17 +439,10 @@ func (c *Client) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 
+	// Cancel run loops; supervise emits Disconnected (preserving discErr).
 	if c.lifeCancel != nil {
 		c.lifeCancel()
 	}
-
-	var err error
-	if c.sess != nil {
-		err = c.sess.Close()
-	}
-
-	// Emit clean Disconnected (no-op if a fatal path already did).
-	c.finishDisconnect(nil)
 
 	done := make(chan struct{})
 	go func() {
@@ -404,10 +455,18 @@ func (c *Client) Close() error {
 		log.Printf("spice: Close: timed out waiting for run loops")
 	}
 
-	c.mu.Lock()
-	security.Wipe(c.password)
-	c.password = nil
-	c.mu.Unlock()
+	// Fallback if supervise did not run (e.g. timeout): still emit once.
+	// finishDisconnect drains fatalCh and uses discErr — never forces nil over fatal.
+	c.finishDisconnect()
+
+	var err error
+	// sess.Close is idempotent; finishDisconnect already closed it on the happy path.
+	if c.sess != nil {
+		// Prefer returning the first close error if any; usually nil after Once path.
+		if e := c.sess.Close(); e != nil && err == nil {
+			err = e
+		}
+	}
 
 	c.eventsMu.Lock()
 	if !c.eventsClosed {
@@ -453,20 +512,4 @@ func isBenignClose(err error) bool {
 	s := err.Error()
 	return strings.Contains(s, "use of closed network connection") ||
 		strings.Contains(s, "closed network connection")
-}
-
-// passwordCopy returns a copy of the client-owned password for tests.
-// Empty after Close wipe.
-func (c *Client) passwordCopy() []byte {
-	if c == nil {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.password == nil {
-		return nil
-	}
-	out := make([]byte, len(c.password))
-	copy(out, c.password)
-	return out
 }
