@@ -41,6 +41,24 @@ gofmt -l .
 
 CI runs the same gates on every push and pull request.
 
+### Integration tests (`//go:build integration`)
+
+Live QEMU SPICE interop tests are **not** part of default `go test ./...`.
+They require a local password SPICE lab:
+
+```bash
+# Terminal 1 — start lab (127.0.0.1:5900, password testpass)
+./scripts/interop_qemu.sh
+
+# Terminal 2
+./scripts/run_integration.sh
+# or: go test -tags=integration -count=1 ./internal/session/ -run TestQEMU
+```
+
+Record fixture hooks and secret-handling notes: [testdata/records/README.md](testdata/records/README.md),
+[scripts/README.md](scripts/README.md). Log redaction is unit-tested in
+`internal/security` (password must never appear in logs).
+
 ## Layout (scaffold)
 
 | Path | Role |

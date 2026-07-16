@@ -5,10 +5,21 @@
 # is available. If QEMU+SPICE is missing, golden vectors in testdata/vectors/ remain
 # the M0 gate (see scripts/milestone0_memo.md).
 #
+# PR 15: record fixture hooks + integration harness support.
+#
 # Usage:
-#   ./scripts/interop_qemu.sh              # start QEMU SPICE lab (foreground)
-#   ./scripts/interop_qemu.sh --print-vv   # print a sample .vv for direct cleartext lab
+#   ./scripts/interop_qemu.sh                 # start QEMU SPICE lab (foreground)
+#   ./scripts/interop_qemu.sh --print-vv      # print a sample .vv for direct cleartext lab
+#   ./scripts/interop_qemu.sh --write-vv PATH # write sample .vv to PATH
+#   ./scripts/interop_qemu.sh --check         # exit 0 if QEMU+SPICE available; else 2
+#   ./scripts/interop_qemu.sh --record FILE   # start QEMU and record SPICE traffic to FILE
 #   SPICE_PORT=5900 SPICE_PASSWORD=testpass ./scripts/interop_qemu.sh
+#   SPICE_RECORD=testdata/records/lab.rec ./scripts/interop_qemu.sh
+#
+# Integration tests (//go:build integration):
+#   Terminal 1: ./scripts/interop_qemu.sh
+#   Terminal 2: ./scripts/run_integration.sh
+#   See scripts/README.md and testdata/records/README.md.
 #
 # Requirements: qemu-system-x86_64 (or $QEMU) built with SPICE support.
 # Optional: remote-viewer for manual cross-check.
@@ -17,6 +28,7 @@
 # digits-only; SPICE_PASSWORD must not contain ',' or newlines (QEMU -spice CSV).
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SPICE_PORT="${SPICE_PORT:-5900}"
 SPICE_PASSWORD="${SPICE_PASSWORD:-testpass}"
 QEMU="${QEMU:-qemu-system-x86_64}"
@@ -24,6 +36,8 @@ MEMORY_MB="${MEMORY_MB:-256}"
 # Empty machine is fine for SPICE bring-up smoke; supply DISK/ISO for full guest.
 DISK="${DISK:-}"
 ISO="${ISO:-}"
+# Optional SPICE traffic record path (also via --record FILE).
+SPICE_RECORD="${SPICE_RECORD:-}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -56,6 +70,13 @@ validate_env() {
       die "SPICE_PASSWORD must not contain comma or newline (would break -spice option CSV)"
       ;;
   esac
+  if [[ -n "$SPICE_RECORD" ]]; then
+    case "$SPICE_RECORD" in
+      *','*|*$'\n'*|*$'\r'*)
+        die "SPICE_RECORD path must not contain comma or newline"
+        ;;
+    esac
+  fi
 }
 
 print_vv() {
@@ -72,15 +93,47 @@ delete-this-file=0
 EOF
 }
 
-if [[ "${1:-}" == "--print-vv" ]]; then
+usage() {
+  sed -n '2,30p' "$0"
+}
+
+cmd="${1:-}"
+
+if [[ "$cmd" == "-h" || "$cmd" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "$cmd" == "--check" ]]; then
+  if have_spice; then
+    echo "ok: QEMU SPICE available ($QEMU)"
+    exit 0
+  fi
+  echo "missing: QEMU with SPICE not available (binary: $QEMU)" >&2
+  exit 2
+fi
+
+if [[ "$cmd" == "--print-vv" ]]; then
   validate_env
   print_vv
   exit 0
 fi
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  sed -n '2,20p' "$0"
+if [[ "$cmd" == "--write-vv" ]]; then
+  shift || true
+  out="${1:-}"
+  [[ -n "$out" ]] || die "--write-vv requires PATH"
+  validate_env
+  mkdir -p "$(dirname "$out")"
+  print_vv >"$out"
+  echo "wrote $out" >&2
   exit 0
+fi
+
+if [[ "$cmd" == "--record" ]]; then
+  shift || true
+  SPICE_RECORD="${1:-}"
+  [[ -n "$SPICE_RECORD" ]] || die "--record requires FILE path"
 fi
 
 validate_env
@@ -98,8 +151,23 @@ Install tips (macOS): brew install qemu  (SPICE support varies by bottle)
           (Linux):  qemu-system-x86 with spice / spice-server packages
 
 Then re-run: $0
+Integration tests: ./scripts/run_integration.sh (after this lab is up)
 EOF
   exit 2
+fi
+
+# Resolve record path relative to repo root when not absolute.
+if [[ -n "$SPICE_RECORD" && "$SPICE_RECORD" != /* ]]; then
+  SPICE_RECORD="${ROOT}/${SPICE_RECORD}"
+fi
+
+if [[ -n "$SPICE_RECORD" ]]; then
+  mkdir -p "$(dirname "$SPICE_RECORD")"
+  # spice-server worker record (when supported by the linked spice-server).
+  export SPICE_WORKER_RECORD_FILENAME="$SPICE_RECORD"
+  echo "Recording SPICE traffic to: $SPICE_RECORD"
+  echo "  (SPICE_WORKER_RECORD_FILENAME + -spice file=… hook)"
+  echo "  Scrub secrets before committing; see testdata/records/README.md"
 fi
 
 echo "Starting QEMU SPICE lab on 127.0.0.1:${SPICE_PORT} password=${SPICE_PASSWORD}"
@@ -108,18 +176,25 @@ print_vv
 echo "---"
 echo "Cross-check: remote-viewer spice://127.0.0.1:${SPICE_PORT}?password=${SPICE_PASSWORD}"
 echo "Or: remote-viewer <( $0 --print-vv )"
+echo "Integration: SPICE_PORT=${SPICE_PORT} SPICE_PASSWORD=… ./scripts/run_integration.sh"
 echo "Stop with Ctrl-C."
 echo "---"
 
 # Always pin addr=127.0.0.1 after port= so the lab cannot listen on all interfaces.
 # Legacy password= is used for broad QEMU bottle compatibility (password-secret needs
 # a separate -object secret,id=… which is overkill for this smoke script).
+spice_opts="port=${SPICE_PORT},addr=127.0.0.1,password=${SPICE_PASSWORD},disable-ticketing=off"
+if [[ -n "$SPICE_RECORD" ]]; then
+  # QEMU -spice file= dumps traffic when the build supports it (fixture hook).
+  spice_opts="${spice_opts},file=${SPICE_RECORD}"
+fi
+
 args=(
   -machine q35,accel=tcg
   -m "$MEMORY_MB"
   -display none
   -vga qxl
-  -spice "port=${SPICE_PORT},addr=127.0.0.1,password=${SPICE_PASSWORD},disable-ticketing=off"
+  -spice "$spice_opts"
   -device virtio-serial-pci
   -chardev spicevmc,id=vdagent,name=vdagent
   -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
