@@ -31,17 +31,23 @@ NO_UI_PACKAGES=(
   ux
 )
 
-# List import paths used by packages matching a pattern (go list style).
+# Load import paths for a go list pattern into the named variable (by ref).
 # Includes production, test, and external-test imports so _test.go cannot
 # smuggle forbidden dependencies past CI.
-imports_of() {
-  local pattern="$1"
+#
+# Must not run only inside process substitution: a failed go list must abort
+# this script's main shell (exit here is reliable).
+load_imports() {
+  local dest_var="$1"
+  local pattern="$2"
   local out
   if ! out="$(go list -f '{{range .Imports}}{{println .}}{{end}}{{range .TestImports}}{{println .}}{{end}}{{range .XTestImports}}{{println .}}{{end}}' "$pattern")"; then
     echo "FAIL: go list failed for pattern: $pattern" >&2
     exit 1
   fi
-  printf '%s\n' "$out" | sort -u
+  # sort -u; empty out is fine (package with no imports)
+  out="$(printf '%s\n' "$out" | sort -u)"
+  printf -v "$dest_var" '%s' "$out"
 }
 
 # True if import path is a UI package we treat as forbidden for non-UI stacks.
@@ -57,6 +63,7 @@ is_ui_import() {
 
 # --- cmd/remote-viewer: only pkg/*, internal/ui, internal/ux ---
 echo "==> checking cmd/remote-viewer imports"
+load_imports _imps ./cmd/...
 while IFS= read -r imp; do
   [ -z "$imp" ] && continue
   case "$imp" in
@@ -70,20 +77,22 @@ while IFS= read -r imp; do
       failed=1
       ;;
   esac
-done < <(imports_of ./cmd/...)
+done <<< "$_imps"
 
 # --- pkg/spice: may use internal/* but not UI / GUI toolkits ---
 echo "==> checking pkg/spice imports (no UI)"
+load_imports _imps ./pkg/spice/...
 while IFS= read -r imp; do
   [ -z "$imp" ] && continue
   if is_ui_import "$imp"; then
     echo "FAIL: pkg/spice must not import UI package $imp"
     failed=1
   fi
-done < <(imports_of ./pkg/spice/...)
+done <<< "$_imps"
 
 # --- pkg/vvfile: no internal, no UI ---
 echo "==> checking pkg/vvfile imports"
+load_imports _imps ./pkg/vvfile/...
 while IFS= read -r imp; do
   [ -z "$imp" ] && continue
   case "$imp" in
@@ -96,7 +105,7 @@ while IFS= read -r imp; do
     echo "FAIL: pkg/vvfile must not import UI package $imp"
     failed=1
   fi
-done < <(imports_of ./pkg/vvfile/...)
+done <<< "$_imps"
 
 # --- Non-UI internal packages: no UI ---
 for core in "${NO_UI_PACKAGES[@]}"; do
@@ -104,17 +113,19 @@ for core in "${NO_UI_PACKAGES[@]}"; do
     continue
   fi
   echo "==> checking internal/$core imports (no UI)"
+  load_imports _imps "./internal/$core/..."
   while IFS= read -r imp; do
     [ -z "$imp" ] && continue
     if is_ui_import "$imp"; then
       echo "FAIL: internal/$core must not import UI package $imp"
       failed=1
     fi
-  done < <(imports_of "./internal/$core/...")
+  done <<< "$_imps"
 done
 
 # --- internal/ui: only pkg/spice, pkg/vvfile, internal/ux among module paths ---
 echo "==> checking internal/ui imports"
+load_imports _imps ./internal/ui/...
 while IFS= read -r imp; do
   [ -z "$imp" ] && continue
   case "$imp" in
@@ -129,7 +140,7 @@ while IFS= read -r imp; do
       failed=1
       ;;
   esac
-done < <(imports_of ./internal/ui/...)
+done <<< "$_imps"
 
 if [ "$failed" -ne 0 ]; then
   echo "import boundary check FAILED"
