@@ -6,6 +6,10 @@
 //   - Display channel reader: allowlist (mode/mark/reset/draw_fill/draw_copy/
 //     surface create|destroy), wire decode, compositor (PR 08)
 //   - Inputs channel: mouse modes, PC XT scancodes, UI inject API (PR 10)
+//   - Best-effort cursor channel: set/hide/move/reset, non-fatal decode (PR 11)
+//
+// Cursor open and runtime decode failures are non-fatal: session continues with
+// server-drawn cursor in the framebuffer.
 //
 // QEMU typing smoke / live SPICE inputs integration is intentionally deferred
 // (//go:build integration or session/UI smoke in a later PR). Unit tests cover
