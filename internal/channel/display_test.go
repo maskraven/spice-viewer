@@ -117,7 +117,7 @@ func TestDisplayDrawCopyRaw(t *testing.T) {
 	}
 }
 
-func TestDisplayDrawCopyUnsupportedLZSoftSkip(t *testing.T) {
+func TestDisplayDrawCopyLZDecodes(t *testing.T) {
 	drv := display.NewNullDriver()
 	comp := display.NewCompositor(drv)
 	ch := channel.NewDisplay(nil, comp)
@@ -129,24 +129,52 @@ func TestDisplayDrawCopyUnsupportedLZSoftSkip(t *testing.T) {
 	binary.LittleEndian.PutUint32(sc[16:20], protocol.SurfaceFlagPrimary)
 	_ = ch.HandleMessage(protocol.MsgDisplaySurfaceCreate, sc[:])
 
-	// LZ DRAW_COPY must soft-skip (not error) so Display.Run would continue.
-	body := encodeDrawCopyLZStub(0, image.Rect(0, 0, 2, 2))
+	// Valid LZ DRAW_COPY must decode (no soft-skip) and paint blue.
+	body := encodeDrawCopyLZ(0, image.Rect(0, 0, 2, 2), 2, 2, 0xff, 0x00, 0x00)
 	if err := ch.HandleMessage(protocol.MsgDisplayDrawCopy, body); err != nil {
-		t.Fatalf("LZ DRAW_COPY must soft-skip, got fatal error: %v", err)
+		t.Fatalf("LZ DRAW_COPY: %v", err)
+	}
+	if skips := ch.ImageSkipCounts(); skips[protocol.ImageTypeLZRGB] != 0 {
+		t.Fatalf("LZ must not soft-skip, got skips %v", skips)
+	}
+	_ = ch.HandleMessage(protocol.MsgDisplayMark, nil)
+	pix, _, _, _ := drv.Snapshot()
+	// BGR blue on wire → RGBA 00 00 ff ff
+	if pix[0] != 0x00 || pix[1] != 0x00 || pix[2] != 0xff || pix[3] != 0xff {
+		t.Fatalf("pixel=%02x%02x%02x%02x want blue opaque", pix[0], pix[1], pix[2], pix[3])
+	}
+}
+
+func TestDisplayDrawCopyUnsupportedQuicSoftSkip(t *testing.T) {
+	drv := display.NewNullDriver()
+	comp := display.NewCompositor(drv)
+	ch := channel.NewDisplay(nil, comp)
+
+	var sc [20]byte
+	binary.LittleEndian.PutUint32(sc[4:8], 4)
+	binary.LittleEndian.PutUint32(sc[8:12], 4)
+	binary.LittleEndian.PutUint32(sc[12:16], protocol.SurfaceFmt32xRGB)
+	binary.LittleEndian.PutUint32(sc[16:20], protocol.SurfaceFlagPrimary)
+	_ = ch.HandleMessage(protocol.MsgDisplaySurfaceCreate, sc[:])
+
+	// Quic DRAW_COPY must soft-skip (not error) so Display.Run continues.
+	body := encodeDrawCopyQuicStub(0, image.Rect(0, 0, 2, 2))
+	if err := ch.HandleMessage(protocol.MsgDisplayDrawCopy, body); err != nil {
+		t.Fatalf("Quic DRAW_COPY must soft-skip, got fatal error: %v", err)
 	}
 	skips := ch.ImageSkipCounts()
-	if skips[protocol.ImageTypeLZRGB] < 1 {
-		t.Fatalf("expected LZRGB image skip, got %v", skips)
+	if skips[protocol.ImageTypeQuic] < 1 {
+		t.Fatalf("expected Quic image skip, got %v", skips)
 	}
 	if ch.DrawSkipCount() < 1 {
 		t.Fatal("expected draw skip count >= 1")
 	}
-	// Second LZ op still non-fatal
+	// Second Quic op still non-fatal
 	if err := ch.HandleMessage(protocol.MsgDisplayDrawCopy, body); err != nil {
-		t.Fatalf("second LZ skip: %v", err)
+		t.Fatalf("second Quic skip: %v", err)
 	}
-	if ch.ImageSkipCounts()[protocol.ImageTypeLZRGB] < 2 {
-		t.Fatal("expected second LZ skip counted")
+	if ch.ImageSkipCounts()[protocol.ImageTypeQuic] < 2 {
+		t.Fatal("expected second Quic skip counted")
 	}
 }
 
@@ -315,13 +343,13 @@ func encodeDrawCopyRaw(surfaceID uint32, box image.Rectangle, w, h int, b, g, r,
 	return body
 }
 
-// encodeDrawCopyLZStub embeds a SpiceImage with type LZ_RGB (unsupported).
-func encodeDrawCopyLZStub(surfaceID uint32, box image.Rectangle) []byte {
+// encodeDrawCopyQuicStub embeds a SpiceImage with type QUIC (still unsupported).
+func encodeDrawCopyQuicStub(surfaceID uint32, box image.Rectangle) []byte {
 	base := appendDisplayBase(nil, surfaceID, box)
 	fixed := 36
 	imgOff := len(base) + fixed
 	img := make([]byte, protocol.SpiceImageDescSize+8)
-	img[8] = protocol.ImageTypeLZRGB
+	img[8] = protocol.ImageTypeQuic
 	binary.LittleEndian.PutUint32(img[10:14], 2)
 	binary.LittleEndian.PutUint32(img[14:18], 2)
 	body := make([]byte, imgOff+len(img))
@@ -335,6 +363,64 @@ func encodeDrawCopyLZStub(surfaceID uint32, box image.Rectangle) []byte {
 	binary.LittleEndian.PutUint16(body[off:off+2], protocol.RopdOpPut)
 	copy(body[imgOff:], img)
 	return body
+}
+
+// encodeDrawCopyLZ builds DRAW_COPY with a solid-color LZ_RGB image (pure literals).
+// b,g,r are wire BGR channel values for every pixel.
+func encodeDrawCopyLZ(surfaceID uint32, box image.Rectangle, w, h int, b, g, r byte) []byte {
+	base := appendDisplayBase(nil, surfaceID, box)
+	fixed := 36
+	imgOff := len(base) + fixed
+	img := packLZRGBImage(w, h, b, g, r)
+	body := make([]byte, imgOff+len(img))
+	copy(body, base)
+	off := len(base)
+	binary.LittleEndian.PutUint32(body[off:off+4], uint32(imgOff))
+	off += 4
+	binary.LittleEndian.PutUint32(body[off:off+4], 0)
+	binary.LittleEndian.PutUint32(body[off+4:off+8], 0)
+	binary.LittleEndian.PutUint32(body[off+8:off+12], uint32(h))
+	binary.LittleEndian.PutUint32(body[off+12:off+16], uint32(w))
+	off += 16
+	binary.LittleEndian.PutUint16(body[off:off+2], protocol.RopdOpPut)
+	copy(body[imgOff:], img)
+	return body
+}
+
+// packLZRGBImage builds SpiceImage type LZ_RGB with solid BGR pixels (literal stream).
+func packLZRGBImage(w, h int, b, g, r byte) []byte {
+	n := w * h
+	var compressed []byte
+	const maxCopy = 32
+	// Big-endian LZ header (magic, version 1.1, RGB32, w, h, stride, top_down=1).
+	hdr := make([]byte, 28)
+	binary.BigEndian.PutUint32(hdr[0:4], 0x20205a4c)
+	binary.BigEndian.PutUint32(hdr[4:8], 0x00010001)
+	binary.BigEndian.PutUint32(hdr[8:12], 8) // RGB32
+	binary.BigEndian.PutUint32(hdr[12:16], uint32(w))
+	binary.BigEndian.PutUint32(hdr[16:20], uint32(h))
+	binary.BigEndian.PutUint32(hdr[20:24], uint32(w*4))
+	binary.BigEndian.PutUint32(hdr[24:28], 1)
+	compressed = append(compressed, hdr...)
+	for i := 0; i < n; {
+		chunk := n - i
+		if chunk > maxCopy {
+			chunk = maxCopy
+		}
+		compressed = append(compressed, byte(chunk-1))
+		for j := 0; j < chunk; j++ {
+			compressed = append(compressed, b, g, r)
+		}
+		i += chunk
+	}
+
+	out := make([]byte, protocol.SpiceImageDescSize+4+len(compressed))
+	out[8] = protocol.ImageTypeLZRGB
+	binary.LittleEndian.PutUint32(out[10:14], uint32(w))
+	binary.LittleEndian.PutUint32(out[14:18], uint32(h))
+	binary.LittleEndian.PutUint32(out[protocol.SpiceImageDescSize:protocol.SpiceImageDescSize+4], uint32(len(compressed)))
+	copy(out[protocol.SpiceImageDescSize+4:], compressed)
+	return out
 }
 
 func appendDisplayBase(buf []byte, surfaceID uint32, box image.Rectangle) []byte {

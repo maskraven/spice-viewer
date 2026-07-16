@@ -222,7 +222,7 @@ func (d *Display) UnknownCounts() map[uint16]int {
 	return out
 }
 
-// ImageSkipCounts returns soft-skipped image type → count (e.g. LZ until PR 09).
+// ImageSkipCounts returns soft-skipped image type → count (e.g. Quic/JPEG until later PRs).
 func (d *Display) ImageSkipCounts() map[uint8]int {
 	d.mu.Lock()
 	defer d.mu.Unlock()

@@ -11,8 +11,8 @@ import (
 	"github.com/maskraven/virt-viewer/internal/protocol"
 )
 
-// ErrUnsupportedImage is returned when DecodeSpiceImage sees a non-bitmap type
-// (LZ, Quic, JPEG, …). Display channel soft-skips these until later codec PRs.
+// ErrUnsupportedImage is returned when DecodeSpiceImage sees a type that is
+// not yet implemented (Quic, JPEG, GLZ, …). Display channel soft-skips these.
 var ErrUnsupportedImage = errors.New("codec: unsupported image type")
 
 // UnsupportedImageError carries the SpiceImage type byte for skip counters.
@@ -21,7 +21,7 @@ type UnsupportedImageError struct {
 }
 
 func (e *UnsupportedImageError) Error() string {
-	return fmt.Sprintf("%v %d (raw bitmap only in Phase 1)", ErrUnsupportedImage, e.Type)
+	return fmt.Sprintf("%v %d", ErrUnsupportedImage, e.Type)
 }
 
 func (e *UnsupportedImageError) Unwrap() error { return ErrUnsupportedImage }
@@ -35,8 +35,8 @@ type RGBA struct {
 }
 
 // DecodeSpiceImage decodes a SpiceImage starting at data (descriptor + payload).
-// Phase 1 supports only SPICE_IMAGE_TYPE_BITMAP (raw). Other types return
-// *UnsupportedImageError wrapping ErrUnsupportedImage.
+// Supports SPICE_IMAGE_TYPE_BITMAP (raw) and SPICE_IMAGE_TYPE_LZ_RGB.
+// Other types return *UnsupportedImageError wrapping ErrUnsupportedImage.
 func DecodeSpiceImage(data []byte) (*RGBA, error) {
 	if len(data) < protocol.SpiceImageDescSize {
 		return nil, fmt.Errorf("codec: spice image short: %d", len(data))
@@ -50,6 +50,8 @@ func DecodeSpiceImage(data []byte) (*RGBA, error) {
 	switch typ {
 	case protocol.ImageTypeBitmap:
 		return DecodeBitmap(payload, width, height)
+	case protocol.ImageTypeLZRGB:
+		return DecodeLZRGB(payload, width, height)
 	default:
 		return nil, &UnsupportedImageError{Type: typ}
 	}

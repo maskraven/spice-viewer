@@ -114,17 +114,18 @@ func TestDecodeBitmapBottomUpFlip(t *testing.T) {
 }
 
 func TestDecodeSpiceImageUnsupportedType(t *testing.T) {
+	// LZ is implemented; Quic remains soft-skipped via UnsupportedImageError.
 	data := make([]byte, protocol.SpiceImageDescSize+4)
-	data[8] = protocol.ImageTypeLZRGB
+	data[8] = protocol.ImageTypeQuic
 	binary.LittleEndian.PutUint32(data[10:14], 1)
 	binary.LittleEndian.PutUint32(data[14:18], 1)
 	_, err := codec.DecodeSpiceImage(data)
 	if err == nil {
-		t.Fatal("expected error for LZ image")
+		t.Fatal("expected error for Quic image")
 	}
 	var uerr *codec.UnsupportedImageError
-	if !errors.As(err, &uerr) || uerr.Type != protocol.ImageTypeLZRGB {
-		t.Fatalf("want UnsupportedImageError LZRGB, got %v", err)
+	if !errors.As(err, &uerr) || uerr.Type != protocol.ImageTypeQuic {
+		t.Fatalf("want UnsupportedImageError Quic, got %v", err)
 	}
 	if !errors.Is(err, codec.ErrUnsupportedImage) {
 		t.Fatalf("want ErrUnsupportedImage unwrap, got %v", err)

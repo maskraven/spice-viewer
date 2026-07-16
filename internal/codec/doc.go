@@ -1,8 +1,9 @@
 // Package codec decodes SPICE image and video payloads (raw, LZ, Quic,
 // JPEG, and later GLZ/MJPEG/H.264 subject to license decisions).
 //
-// Phase 1 (PR 08): raw bitmap decoder only (SPICE_IMAGE_TYPE_BITMAP).
-// LZ lands in a follow-up PR.
+// Supported today:
+//   - SPICE_IMAGE_TYPE_BITMAP (raw 32BIT / RGBA)
+//   - SPICE_IMAGE_TYPE_LZ_RGB (RGB16/24/32/RGBA FastLZ-derived stream)
 //
 // Import rules: no UI imports.
 package codec
