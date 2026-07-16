@@ -6,12 +6,10 @@ package channel
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"strings"
 	"sync"
 
 	"github.com/maskraven/virt-viewer/internal/protocol"
@@ -582,12 +580,3 @@ func decodeCursorPixels(typ uint8, w, h int, data []byte) ([]byte, error) {
 	}
 }
 
-func isClosedConn(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, net.ErrClosed) {
-		return true
-	}
-	return strings.Contains(err.Error(), "closed network connection")
-}
