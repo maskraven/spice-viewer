@@ -1,0 +1,92 @@
+{
+  "description": "host-subject DN matching fixtures — compare design algorithm vs spice-gtk/ssl_verify.c",
+  "upstream": {
+    "file": "common/ssl_verify.c",
+    "project": "https://gitlab.freedesktop.org/spice/spice-common",
+    "commit": "71e45706981973014eaab3d4b533d35d79e19ffa",
+    "functions": ["subject_to_x509_name", "verify_subject"]
+  },
+  "spice_gtk_algorithm": [
+    "Parse host-subject string TYPE=value pairs split on unescaped commas (\\, and \\\\ escapes).",
+    "Build OpenSSL X509_NAME via X509_NAME_add_entry_by_txt(MBSTRING_UTF8) for each RDN in order.",
+    "Require X509_NAME_entry_count(cert) == entry_count(expected).",
+    "Match with X509_NAME_cmp(cert_subject, expected) == 0 (order-sensitive, all RDNs).",
+    "Chain verification still uses SSL verify callback; subject pin is additional check on leaf."
+  ],
+  "design_algorithm_phase1": [
+    "Parse host-subject OpenSSL-style DN string.",
+    "Compare CN (case-insensitive fold), O and OU string slices (order-independent multi-value).",
+    "Optionally C, ST, L if present in expected.",
+    "Do NOT use pkix.Name.String() equality against the .vv host-subject string."
+  ],
+  "intentional_differences": [
+    "spice-gtk requires exact RDN count and X509_NAME_cmp order; design is a subset field match (CN/O/OU).",
+    "Risk: cert with extra RDNs (emailAddress, ST, L) may pass spice-gtk only if host-subject includes them; design subset match is more permissive on extra cert RDNs but must still require all expected fields.",
+    "Phase 1 recommendation: implement design subset match first; add full X509_NAME_cmp parity test if Proxmox field fails in lab.",
+    "Proxmox generates host-subject via X509_NAME_oneline then rewrites / to commas (AccessControl::read_x509_subject_spice) — typically includes all subject RDNs from pve-ssl.pem."
+  ],
+  "fixtures": [
+    {
+      "name": "pve_typical",
+      "host_subject": "OU=PVE Cluster Node,O=Proxmox Virtual Environment,CN=pve.example.com",
+      "cert_subject_rdns": {
+        "OU": ["PVE Cluster Node"],
+        "O": ["Proxmox Virtual Environment"],
+        "CN": "pve.example.com"
+      },
+      "expect_match_design": true,
+      "expect_match_spice_gtk_x509_name_cmp": true
+    },
+    {
+      "name": "pve_with_geo_and_email",
+      "host_subject": "C=CA,ST=California,L=Salinas,O=test,OU=test,CN=pve-mini.test.com,emailAddress=admin@test.com",
+      "cert_subject_rdns": {
+        "C": ["CA"],
+        "ST": ["California"],
+        "L": ["Salinas"],
+        "O": ["test"],
+        "OU": ["test"],
+        "CN": "pve-mini.test.com",
+        "emailAddress": ["admin@test.com"]
+      },
+      "expect_match_design": true,
+      "expect_match_spice_gtk_x509_name_cmp": true,
+      "comment": "Shape from public Proxmox forum .vv example (sanitized)"
+    },
+    {
+      "name": "cn_mismatch",
+      "host_subject": "OU=PVE Cluster Node,O=Proxmox Virtual Environment,CN=pve.example.com",
+      "cert_subject_rdns": {
+        "OU": ["PVE Cluster Node"],
+        "O": ["Proxmox Virtual Environment"],
+        "CN": "other.example.com"
+      },
+      "expect_match_design": false,
+      "expect_match_spice_gtk_x509_name_cmp": false
+    },
+    {
+      "name": "extra_rdn_on_cert_only",
+      "host_subject": "O=Proxmox Virtual Environment,CN=pve.example.com",
+      "cert_subject_rdns": {
+        "OU": ["PVE Cluster Node"],
+        "O": ["Proxmox Virtual Environment"],
+        "CN": "pve.example.com"
+      },
+      "expect_match_design": true,
+      "expect_match_spice_gtk_x509_name_cmp": false,
+      "comment": "Documents design vs spice-gtk divergence: design subset match ignores extra cert RDNs; spice-gtk entry_count mismatch rejects"
+    },
+    {
+      "name": "rdn_order_swapped_in_host_subject",
+      "host_subject": "CN=pve.example.com,O=Proxmox Virtual Environment,OU=PVE Cluster Node",
+      "cert_subject_rdns": {
+        "OU": ["PVE Cluster Node"],
+        "O": ["Proxmox Virtual Environment"],
+        "CN": "pve.example.com"
+      },
+      "expect_match_design": true,
+      "expect_match_spice_gtk_x509_name_cmp": false,
+      "comment": "X509_NAME_cmp is order-sensitive; design field compare is order-independent"
+    }
+  ]
+}

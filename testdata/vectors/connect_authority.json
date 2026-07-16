@@ -1,0 +1,56 @@
+{
+  "description": "HTTP CONNECT authority fixtures for opaque multi-colon Proxmox pvespiceproxy hosts",
+  "algorithm": "connectAuthority(host, port) = host + \":\" + strconv.Itoa(port); never net.SplitHostPort / JoinHostPort on host",
+  "notes": [
+    "Proxmox passes the spice proxy ticket as the virt-viewer 'host' field.",
+    "PVE::Ticket::verify_spice_connect_url documents that the viewer connects with \"$ticket:$port\".",
+    "Old-style host: pvespiceproxy:<8hex_ts>:<vmid>:<node>::<40hex_sig>",
+    "New-style host: pvespiceproxy:<8hex_ts>:<vmid>:<node>:<port>::<40hex_sig> (port also appears after final colon in CONNECT)",
+    "HTTP version in the line is implementation-defined (HTTP/1.1 preferred; spice-gtk historically used 1.0)."
+  ],
+  "fixtures": [
+    {
+      "name": "design_doc_old_style_token",
+      "host": "pvespiceproxy:687d1ec6:10016:pve::dcc9e35662ef0b1233e12ac02880ea7851f9218e",
+      "port": 61002,
+      "proxy": "http://proxmox.example.com:3128",
+      "connect_request_line": "CONNECT pvespiceproxy:687d1ec6:10016:pve::dcc9e35662ef0b1233e12ac02880ea7851f9218e:61002 HTTP/1.1",
+      "host_header": "pvespiceproxy:687d1ec6:10016:pve::dcc9e35662ef0b1233e12ac02880ea7851f9218e:61002",
+      "tcp_dial_address": "proxmox.example.com:3128",
+      "forbidden": [
+        "net.SplitHostPort(host)",
+        "net.JoinHostPort(host, port)",
+        "url.Parse('//'+host)"
+      ]
+    },
+    {
+      "name": "pve_new_style_token_with_embedded_port",
+      "host": "pvespiceproxy:668616dd:100:pve-mini:61001::3ff537ec3fe802487ce459062f111422f4b79219",
+      "port": 61001,
+      "proxy": "http://pve-mini.example.com:3128",
+      "connect_request_line": "CONNECT pvespiceproxy:668616dd:100:pve-mini:61001::3ff537ec3fe802487ce459062f111422f4b79219:61001 HTTP/1.1",
+      "host_header": "pvespiceproxy:668616dd:100:pve-mini:61001::3ff537ec3fe802487ce459062f111422f4b79219:61001",
+      "tcp_dial_address": "pve-mini.example.com:3128",
+      "comment": "Matches PVE::Ticket::verify_spice_connect_url first regex (signed port == CONNECT port)"
+    },
+    {
+      "name": "pve_old_style_forum_capture",
+      "host": "pvespiceproxy:668616dd:0:pve-mini::3ff537ec3fe802487ce459062f111422f4b79219",
+      "port": 61001,
+      "proxy": "http://pve-mini.example.com:3128",
+      "connect_request_line": "CONNECT pvespiceproxy:668616dd:0:pve-mini::3ff537ec3fe802487ce459062f111422f4b79219:61001 HTTP/1.1",
+      "host_header": "pvespiceproxy:668616dd:0:pve-mini::3ff537ec3fe802487ce459062f111422f4b79219:61001",
+      "tcp_dial_address": "pve-mini.example.com:3128",
+      "comment": "Shape observed in public Proxmox forum packet captures (sanitized node name)"
+    },
+    {
+      "name": "direct_dns_no_proxy_lab",
+      "host": "127.0.0.1",
+      "port": 5900,
+      "proxy": null,
+      "connect_request_line": null,
+      "direct_dial_address": "127.0.0.1:5900",
+      "comment": "Lab cleartext / direct TLS without CONNECT; still avoid SplitHostPort on opaque hosts"
+    }
+  ]
+}
