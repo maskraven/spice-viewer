@@ -27,17 +27,12 @@ func directDialAddress(host string, port int) string {
 }
 
 // proxyDialAddress returns the TCP address for dialing an HTTP proxy.
-// Defaults ports when the URL omits them (80 for http, 443 for https).
+// Defaults port 80 when omitted. https is rejected in validate (Phase 1).
 func proxyDialAddress(u *url.URL) string {
 	host := u.Hostname()
 	port := u.Port()
 	if port == "" {
-		switch u.Scheme {
-		case "https":
-			port = "443"
-		default:
-			port = "80"
-		}
+		port = "80"
 	}
 	// Hostname() strips brackets from IPv6; JoinHostPort re-adds them.
 	return net.JoinHostPort(host, port)

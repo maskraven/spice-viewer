@@ -154,9 +154,51 @@ func TestBuildTLSConfig_DNSMode(t *testing.T) {
 	}
 }
 
+func TestBuildTLSConfig_DNSModeSystemRoots(t *testing.T) {
+	cfg, err := buildTLSConfig(&TLSParams{
+		ServerName: "example.com",
+		// RootCAs nil → system trust store
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RootCAs != nil {
+		t.Fatal("expected nil RootCAs for system roots")
+	}
+	if cfg.ServerName != "example.com" {
+		t.Fatalf("ServerName=%q", cfg.ServerName)
+	}
+	if cfg.InsecureSkipVerify {
+		t.Fatal("DNS mode must not skip verify")
+	}
+}
+
 func TestBuildTLSConfig_MissingRootCAs(t *testing.T) {
 	_, err := buildTLSConfig(&TLSParams{HostSubject: "CN=x"})
 	if !errors.Is(err, ErrMissingRootCAs) {
-		t.Fatalf("got %v", err)
+		t.Fatalf("nil pool pin mode: got %v", err)
+	}
+	_, err = buildTLSConfig(&TLSParams{
+		RootCAs:     x509.NewCertPool(),
+		HostSubject: "CN=x",
+	})
+	if !errors.Is(err, ErrMissingRootCAs) {
+		t.Fatalf("empty pool pin mode: got %v", err)
+	}
+}
+
+func TestBuildTLSConfig_PinModeClearsCallerServerName(t *testing.T) {
+	dir := certsDir(t)
+	roots := loadRootPool(t, filepath.Join(dir, "ca.pem"))
+	cfg, err := buildTLSConfig(&TLSParams{
+		RootCAs:     roots,
+		HostSubject: "CN=pve.example.com",
+		ServerName:  "must-not-appear",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ServerName != "" {
+		t.Fatalf("pin mode must clear ServerName, got %q", cfg.ServerName)
 	}
 }

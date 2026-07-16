@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -38,6 +39,122 @@ func TestDialSPICE_MissingCABeforeDial(t *testing.T) {
 		TLS: &TLSParams{HostSubject: "CN=x"},
 	})
 	if !errors.Is(err, ErrMissingRootCAs) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestDialSPICE_EmptyCertPoolBeforeDial(t *testing.T) {
+	d := NewDialer()
+	d.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		t.Fatal("dial must not be called when CA pool empty")
+		return nil, errors.New("unreachable")
+	}
+	_, err := d.DialSPICE(context.Background(), Endpoint{
+		Host: pveHost,
+		Port: 61002,
+		Proxy: &url.URL{
+			Scheme: "http",
+			Host:   "127.0.0.1:1",
+		},
+		TLS: &TLSParams{
+			RootCAs:     x509.NewCertPool(),
+			HostSubject: "CN=x",
+		},
+	})
+	if !errors.Is(err, ErrMissingRootCAs) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestDialSPICE_HTTPSProxyRejectedBeforeDial(t *testing.T) {
+	d := NewDialer()
+	d.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		t.Fatal("dial must not be called for https proxy")
+		return nil, errors.New("unreachable")
+	}
+	u, err := url.Parse("https://proxy.example.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = d.DialSPICE(context.Background(), Endpoint{
+		Host:           pveHost,
+		Port:           61002,
+		Proxy:          u,
+		AllowCleartext: true,
+	})
+	if !errors.Is(err, ErrUnsupportedProxy) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestDialSPICE_CONNECTHonorsContextTimeout(t *testing.T) {
+	// Accept TCP but never complete CONNECT response — dial must return on timeout.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		// Read request then hang (no response).
+		br := bufio.NewReader(c)
+		_, _ = br.ReadString('\n')
+		for {
+			h, err := br.ReadString('\n')
+			if err != nil || h == "\r\n" || h == "\n" {
+				break
+			}
+		}
+		time.Sleep(5 * time.Second)
+	}()
+
+	proxyURL, err := url.Parse("http://" + ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewDialer()
+	d.Timeout = 150 * time.Millisecond
+	start := time.Now()
+	_, err = d.DialSPICE(context.Background(), Endpoint{
+		Host:           pveHost,
+		Port:           61002,
+		Proxy:          proxyURL,
+		AllowCleartext: true,
+	})
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("CONNECT hang ignored timeout: elapsed %v err %v", elapsed, err)
+	}
+	// Should surface as context deadline (or wrapped timeout from deadline).
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, os.ErrDeadlineExceeded) {
+		// net.Error with Timeout() is also acceptable.
+		var ne net.Error
+		if !errors.As(err, &ne) || !ne.Timeout() {
+			t.Fatalf("want deadline/timeout error, got %v", err)
+		}
+	}
+}
+
+func TestDialSPICE_HostControlCharsBeforeDial(t *testing.T) {
+	d := NewDialer()
+	d.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		t.Fatal("dial must not be called for injected host")
+		return nil, errors.New("unreachable")
+	}
+	_, err := d.DialSPICE(context.Background(), Endpoint{
+		Host:           "pve\r\nX: y",
+		Port:           61002,
+		AllowCleartext: true,
+	})
+	if !errors.Is(err, ErrInvalidHost) {
 		t.Fatalf("got %v", err)
 	}
 }

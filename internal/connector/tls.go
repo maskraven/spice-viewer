@@ -14,21 +14,23 @@ var ErrTLSVerify = errors.New("connector: TLS peer verification failed")
 // buildTLSConfig constructs a tls.Config for the given TLSParams.
 //
 // Proxmox / subject-pin mode (HostSubject non-empty):
+//   - RootCAs required and non-empty
 //   - InsecureSkipVerify is true only to skip hostname checks
 //   - VerifyPeerCertificate performs chain verify against RootCAs + DN pin
 //   - ServerName is intentionally left empty (must not be the pvespiceproxy token)
 //
 // Direct DNS mode (HostSubject empty):
-//   - Standard verification with ServerName and RootCAs
+//   - Standard verification with ServerName
+//   - RootCAs nil uses the system trust store; non-nil uses the custom pool
 func buildTLSConfig(params *TLSParams) (*tls.Config, error) {
 	if params == nil {
 		return nil, errors.New("connector: nil TLSParams")
 	}
-	if params.RootCAs == nil {
-		return nil, ErrMissingRootCAs
-	}
 
 	if params.HostSubject != "" {
+		if certPoolMissing(params.RootCAs) {
+			return nil, ErrMissingRootCAs
+		}
 		hostSubject := params.HostSubject
 		roots := params.RootCAs
 		return &tls.Config{
@@ -47,6 +49,7 @@ func buildTLSConfig(params *TLSParams) (*tls.Config, error) {
 	if params.ServerName == "" {
 		return nil, ErrMissingTLSIdentity
 	}
+	// nil RootCAs → system roots (design: direct TLS DNS may use system or custom).
 	return &tls.Config{
 		RootCAs:    params.RootCAs,
 		ServerName: params.ServerName,

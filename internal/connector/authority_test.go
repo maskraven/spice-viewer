@@ -56,10 +56,8 @@ func TestProxyDialAddress_Defaults(t *testing.T) {
 	if got := proxyDialAddress(u); got != "proxy.example.com:80" {
 		t.Fatalf("http default: got %q", got)
 	}
-	u, _ = url.Parse("https://proxy.example.com")
-	if got := proxyDialAddress(u); got != "proxy.example.com:443" {
-		t.Fatalf("https default: got %q", got)
-	}
+	// Phase 1 rejects https proxies in validate; dial address still defaults to 80
+	// for any URL that reaches proxyDialAddress without an explicit port.
 	u, _ = url.Parse("http://proxy.example.com:3128")
 	if got := proxyDialAddress(u); got != "proxy.example.com:3128" {
 		t.Fatalf("explicit: got %q", got)

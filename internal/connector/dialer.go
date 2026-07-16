@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,7 +18,7 @@ type DefaultDialer struct {
 	// DialContext dials a raw TCP address. If nil, net.Dialer is used.
 	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
 	// Timeout is the default dial timeout when the context has no deadline.
-	// Zero means 30s.
+	// Zero means 30s. Applies to TCP dial, CONNECT write/read, and TLS handshake.
 	Timeout time.Duration
 }
 
@@ -97,6 +98,8 @@ func (d *DefaultDialer) dialTCP(ctx context.Context, address string) (net.Conn, 
 //	Host: <opaque-host>:<port>
 //
 // On HTTP 200, the connection is the tunnel for subsequent TLS/SPICE.
+// CONNECT write/read honor ctx (deadline + cancel) so dial timeout covers the
+// full proxy handshake, not only the TCP connect.
 func (d *DefaultDialer) dialViaCONNECT(ctx context.Context, ep Endpoint) (net.Conn, error) {
 	proxyAddr := proxyDialAddress(ep.Proxy)
 	conn, err := d.dialTCP(ctx, proxyAddr)
@@ -104,18 +107,26 @@ func (d *DefaultDialer) dialViaCONNECT(ctx context.Context, ep Endpoint) (net.Co
 		return nil, fmt.Errorf("connector: proxy dial: %w", err)
 	}
 
+	release, err := bindConnToContext(ctx, conn)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
 	authority := connectAuthority(ep.Host, ep.Port)
 	// Manual write so request-target is exactly the opaque authority (no scheme tricks).
 	if err := writeCONNECT(conn, authority); err != nil {
+		release()
 		_ = conn.Close()
-		return nil, err
+		return nil, mapConnCtxErr(ctx, fmt.Errorf("connector: write CONNECT: %w", err))
 	}
 
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
 	if err != nil {
+		release()
 		_ = conn.Close()
-		return nil, fmt.Errorf("connector: read CONNECT response: %w", err)
+		return nil, mapConnCtxErr(ctx, fmt.Errorf("connector: read CONNECT response: %w", err))
 	}
 	// CONNECT 200: the rest of the connection is the tunnel. Do NOT drain
 	// resp.Body (that would consume tunnel bytes / block until peer close).
@@ -125,12 +136,16 @@ func (d *DefaultDialer) dialViaCONNECT(ctx context.Context, ep Endpoint) (net.Co
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			_ = resp.Body.Close()
 		}
+		release()
 		_ = conn.Close()
 		return nil, fmt.Errorf("connector: CONNECT refused: %s", resp.Status)
 	}
 	if resp.Body != nil {
 		_ = resp.Body.Close()
 	}
+
+	// Clear deadlines / cancel watch before returning the long-lived tunnel.
+	release()
 
 	// Buffered bytes (if any) must not be lost; wrap if needed.
 	if br.Buffered() > 0 {
@@ -139,10 +154,50 @@ func (d *DefaultDialer) dialViaCONNECT(ctx context.Context, ep Endpoint) (net.Co
 	return conn, nil
 }
 
+// bindConnToContext applies ctx deadline to conn and interrupts blocking I/O
+// when ctx is cancelled. The returned release must be called exactly once:
+// it stops the cancel watcher and clears the deadline (so the tunnel is not
+// bound to the dial context after CONNECT completes).
+func bindConnToContext(ctx context.Context, conn net.Conn) (release func(), err error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, fmt.Errorf("connector: set deadline: %w", err)
+		}
+	}
+
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Unblock Read/Write without permanently closing: a past deadline
+			// fails in-flight I/O; release() clears it if CONNECT already finished.
+			_ = conn.SetDeadline(time.Unix(1, 0))
+		case <-done:
+		}
+	}()
+
+	release = func() {
+		once.Do(func() {
+			close(done)
+			_ = conn.SetDeadline(time.Time{})
+		})
+	}
+	return release, nil
+}
+
+func mapConnCtxErr(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("%w", ctx.Err())
+	}
+	return err
+}
+
 // writeCONNECT writes a minimal HTTP CONNECT request.
 // The request line is exactly: CONNECT <authority> HTTP/1.1
 func writeCONNECT(w io.Writer, authority string) error {
 	// authority may contain many ':' — write literally.
+	// Control characters are rejected in Endpoint.validate before dial.
 	var b strings.Builder
 	b.Grow(len(authority)*2 + 64)
 	b.WriteString("CONNECT ")
@@ -155,7 +210,7 @@ func writeCONNECT(w io.Writer, authority string) error {
 	b.WriteString("\r\n")
 	_, err := io.WriteString(w, b.String())
 	if err != nil {
-		return fmt.Errorf("connector: write CONNECT: %w", err)
+		return err
 	}
 	return nil
 }
