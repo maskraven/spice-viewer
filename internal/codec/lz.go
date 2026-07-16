@@ -13,7 +13,8 @@ import (
 // SPICE LZ (FastLZ-derived) constants from spice-common/common/lz_common.h
 // and lz.c. Wire header fields after the magic are big-endian.
 const (
-	lzMagic        uint32 = 0x20205a4c // ASCII "LZ  " as big-endian word
+	// lzMagic is 0x20205a4c; big-endian wire bytes are 20 20 5a 4c ("  ZL").
+	lzMagic        uint32 = 0x20205a4c
 	lzVersionMajor        = 1
 	lzVersionMinor        = 1
 	lzVersion      uint32 = (lzVersionMajor << 16) | lzVersionMinor // 0x00010001
@@ -143,7 +144,7 @@ func decodeLZStream(data []byte, expectW, expectH uint32) (*RGBA, error) {
 	if topDown == 0 {
 		flipRGBAVertical(img)
 	}
-	// RGB32/RGB24: force opaque (xRGB). RGBA keeps decoded alpha.
+	// RGB32/RGB24/RGB16: force opaque (xRGB). RGBA keeps decoded alpha.
 	if lzType == lzTypeRGB32 || lzType == lzTypeRGB24 || lzType == lzTypeRGB16 {
 		ForceOpaque(img)
 	}
@@ -165,6 +166,74 @@ func (r *lzReader) read() (byte, error) {
 	return c, nil
 }
 
+// lzReadMatchLen resolves match length after ctrl was read.
+// lengthField is (ctrl >> 5) still including the initial bias encoding
+// (before the spice-common length--). bias is the type-specific post-extension
+// add (+1 RGB32/24, +2 RGB16, +3 alpha). remaining is nPix-op.
+//
+// Extension bytes are accumulated in int64 and rejected if the final length
+// (after bias) would exceed remaining — preventing uint32 wrap of 0xFF runs.
+func lzReadMatchLen(r *lzReader, lengthField uint32, bias, remaining int) (int, error) {
+	if remaining <= 0 {
+		return 0, fmt.Errorf("codec: lz match with no remaining pixels")
+	}
+	// spice-common: len = (ctrl>>5) - 1, then optional 0xFF extension, then +bias.
+	length := int64(lengthField) - 1
+	if length < 0 {
+		return 0, fmt.Errorf("codec: lz invalid length field %d", lengthField)
+	}
+	if length == 7-1 {
+		for {
+			code, err := r.read()
+			if err != nil {
+				return 0, err
+			}
+			length += int64(code)
+			// Cap early so a long 0xFF run cannot wrap a uint32 later.
+			if length+int64(bias) > int64(remaining) {
+				return 0, fmt.Errorf("codec: lz match length exceeds remaining %d", remaining)
+			}
+			if code != 255 {
+				break
+			}
+		}
+	}
+	final := length + int64(bias)
+	if final <= 0 || final > int64(remaining) {
+		return 0, fmt.Errorf("codec: lz match length %d exceeds remaining %d", final, remaining)
+	}
+	return int(final), nil
+}
+
+// lzReadMatchOfs resolves the back-reference distance (after +1 bias) from
+// the low 5 bits of ctrl and following stream bytes (including far distance).
+func lzReadMatchOfs(r *lzReader, ctrlLow5 byte) (int, error) {
+	ofs := uint32(ctrlLow5) << 8
+	code, err := r.read()
+	if err != nil {
+		return 0, err
+	}
+	ofs += uint32(code)
+	// Far distance (spice-common): code==255 and high 5 bits of distance were all 1.
+	if code == 255 && (ofs-uint32(code)) == (31<<8) {
+		hi, err := r.read()
+		if err != nil {
+			return 0, err
+		}
+		lo, err := r.read()
+		if err != nil {
+			return 0, err
+		}
+		ofs = uint32(hi)<<8 + uint32(lo) + lzMaxDistance
+	}
+	// Offset bias +1. Far-path max is ~65535+8191+1, always fits int.
+	ofs++
+	if ofs == 0 {
+		return 0, fmt.Errorf("codec: lz zero backref after bias")
+	}
+	return int(ofs), nil
+}
+
 // lzDecompressRGB32 decodes spice-common lz_rgb32_decompress into tightly packed
 // RGBA (R,G,B from wire B,G,R; A set when defaultAlpha, else left 0).
 func lzDecompressRGB32(src []byte, out []byte, nPix int, defaultAlpha bool) error {
@@ -184,54 +253,22 @@ func lzDecompressRGB32Consumed(src []byte, out []byte, nPix int, defaultAlpha bo
 			return nil, err
 		}
 		if ctrl >= lzMaxCopy {
-			// Dictionary / RLE match.
-			length := uint32(ctrl >> 5)
-			ofs := uint32(ctrl&31) << 8
-			length--
-			if length == 7-1 {
-				for {
-					code, err := r.read()
-					if err != nil {
-						return nil, err
-					}
-					length += uint32(code)
-					if code != 255 {
-						break
-					}
-				}
-			}
-			code, err := r.read()
+			length, err := lzReadMatchLen(r, uint32(ctrl>>5), 1 /*RGB32 bias*/, nPix-op)
 			if err != nil {
 				return nil, err
 			}
-			ofs += uint32(code)
-			// Far distance (spice-common): code==255 and high 5 bits of distance were all 1.
-			if code == 255 && (ofs-uint32(code)) == (31<<8) {
-				hi, err := r.read()
-				if err != nil {
-					return nil, err
-				}
-				lo, err := r.read()
-				if err != nil {
-					return nil, err
-				}
-				ofs = uint32(hi)<<8 + uint32(lo) + lzMaxDistance
+			ofs, err := lzReadMatchOfs(r, ctrl&31)
+			if err != nil {
+				return nil, err
 			}
-			// RGB32 length bias +1, offset bias +1.
-			length++
-			ofs++
-
-			if ofs == 0 || int(ofs) > op {
+			if ofs > op {
 				return nil, fmt.Errorf("codec: lz bad backref ofs=%d op=%d", ofs, op)
 			}
-			if op+int(length) > nPix {
-				return nil, fmt.Errorf("codec: lz match overflows image")
-			}
-			ref := op - int(ofs)
+			ref := op - ofs
 			if ref == op-1 {
 				// RLE: repeat previous pixel.
 				si := ref * 4
-				for i := 0; i < int(length); i++ {
+				for i := 0; i < length; i++ {
 					di := op * 4
 					out[di+0] = out[si+0]
 					out[di+1] = out[si+1]
@@ -244,7 +281,7 @@ func lzDecompressRGB32Consumed(src []byte, out []byte, nPix int, defaultAlpha bo
 					op++
 				}
 			} else {
-				for i := 0; i < int(length); i++ {
+				for i := 0; i < length; i++ {
 					si := (ref + i) * 4
 					di := op * 4
 					out[di+0] = out[si+0]
@@ -308,56 +345,26 @@ func lzDecompressAlpha(src []byte, out []byte, nPix int) error {
 			return err
 		}
 		if ctrl >= lzMaxCopy {
-			length := uint32(ctrl >> 5)
-			ofs := uint32(ctrl&31) << 8
-			length--
-			if length == 7-1 {
-				for {
-					code, err := r.read()
-					if err != nil {
-						return err
-					}
-					length += uint32(code)
-					if code != 255 {
-						break
-					}
-				}
-			}
-			code, err := r.read()
+			length, err := lzReadMatchLen(r, uint32(ctrl>>5), 3 /*alpha bias*/, nPix-op)
 			if err != nil {
 				return err
 			}
-			ofs += uint32(code)
-			if code == 255 && (ofs-uint32(code)) == (31<<8) {
-				hi, err := r.read()
-				if err != nil {
-					return err
-				}
-				lo, err := r.read()
-				if err != nil {
-					return err
-				}
-				ofs = uint32(hi)<<8 + uint32(lo) + lzMaxDistance
+			ofs, err := lzReadMatchOfs(r, ctrl&31)
+			if err != nil {
+				return err
 			}
-			// Alpha plane: length bias +3, offset bias +1.
-			length += 3
-			ofs++
-
-			if ofs == 0 || int(ofs) > op {
+			if ofs > op {
 				return fmt.Errorf("codec: lz alpha bad backref ofs=%d op=%d", ofs, op)
 			}
-			if op+int(length) > nPix {
-				return fmt.Errorf("codec: lz alpha match overflows image")
-			}
-			ref := op - int(ofs)
+			ref := op - ofs
 			if ref == op-1 {
 				a := out[ref*4+3]
-				for i := 0; i < int(length); i++ {
+				for i := 0; i < length; i++ {
 					out[op*4+3] = a
 					op++
 				}
 			} else {
-				for i := 0; i < int(length); i++ {
+				for i := 0; i < length; i++ {
 					out[op*4+3] = out[(ref+i)*4+3]
 					op++
 				}
@@ -397,55 +404,26 @@ func lzDecompressRGB16ToRGBA(src []byte, out []byte, nPix int) error {
 			return err
 		}
 		if ctrl >= lzMaxCopy {
-			length := uint32(ctrl >> 5)
-			ofs := uint32(ctrl&31) << 8
-			length--
-			if length == 7-1 {
-				for {
-					code, err := r.read()
-					if err != nil {
-						return err
-					}
-					length += uint32(code)
-					if code != 255 {
-						break
-					}
-				}
-			}
-			code, err := r.read()
+			length, err := lzReadMatchLen(r, uint32(ctrl>>5), 2 /*RGB16 bias*/, nPix-op)
 			if err != nil {
 				return err
 			}
-			ofs += uint32(code)
-			if code == 255 && (ofs-uint32(code)) == (31<<8) {
-				hi, err := r.read()
-				if err != nil {
-					return err
-				}
-				lo, err := r.read()
-				if err != nil {
-					return err
-				}
-				ofs = uint32(hi)<<8 + uint32(lo) + lzMaxDistance
+			ofs, err := lzReadMatchOfs(r, ctrl&31)
+			if err != nil {
+				return err
 			}
-			length += 2 // RGB16 bias
-			ofs++
-
-			if ofs == 0 || int(ofs) > op {
+			if ofs > op {
 				return fmt.Errorf("codec: lz rgb16 bad backref ofs=%d op=%d", ofs, op)
 			}
-			if op+int(length) > nPix {
-				return fmt.Errorf("codec: lz rgb16 match overflows image")
-			}
-			ref := op - int(ofs)
+			ref := op - ofs
 			if ref == op-1 {
 				v := pix16[ref]
-				for i := 0; i < int(length); i++ {
+				for i := 0; i < length; i++ {
 					pix16[op] = v
 					op++
 				}
 			} else {
-				for i := 0; i < int(length); i++ {
+				for i := 0; i < length; i++ {
 					pix16[op] = pix16[ref+i]
 					op++
 				}
@@ -469,21 +447,12 @@ func lzDecompressRGB16ToRGBA(src []byte, out []byte, nPix int) error {
 			}
 		}
 	}
-	// Expand RGB565-ish spice rgb16 (5-5-5 style via spice-common to_rgb32 macros)
-	// spice stores 16-bit as-is on encode; to_rgb32 expands:
-	//   r_raw = decode high path — we use the same expansion as lz_rgb16_to_rgb32:
-	//   out->r = decode; out->b = decode; then reconstruct — wait, ENCODE is (pix>>8), (pix&0xff)
-	// so the 16-bit value is the pixel as stored. Expansion from spice-common:
-	//   out->r = high byte path in to_rgb32 reads two separate decode bytes not the packed form
-	// when decoding TO_RGB32 from stream it re-reads as two bytes differently.
-	// When decoding as RGB16 native then converting: we expand 5-6-5? Looking at encode HASH —
-	// GET_r (pix>>10)&0x1f, GET_g (pix>>5)&0x1f, GET_b pix&0x1f — so it is RGB555 in low 15 bits.
+	// Expand RGB555 (spice GET_r/g/b masks) to 8-bit channels.
 	for i := 0; i < nPix; i++ {
 		p := pix16[i]
 		r5 := (p >> 10) & 0x1f
 		g5 := (p >> 5) & 0x1f
 		b5 := p & 0x1f
-		// Expand 5-bit channels to 8-bit (replicate top bits).
 		di := i * 4
 		out[di+0] = uint8((r5 << 3) | (r5 >> 2))
 		out[di+1] = uint8((g5 << 3) | (g5 >> 2))

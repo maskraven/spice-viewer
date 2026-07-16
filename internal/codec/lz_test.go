@@ -305,3 +305,194 @@ func TestDecodeLZRGBAWithAlpha(t *testing.T) {
 			img.Pix[0], img.Pix[1], img.Pix[2], img.Pix[3])
 	}
 }
+
+func payloadFromStream(stream []byte) []byte {
+	p := make([]byte, 4+len(stream))
+	binary.LittleEndian.PutUint32(p[:4], uint32(len(stream)))
+	copy(p[4:], stream)
+	return p
+}
+
+func TestDecodeLZRGB16Golden1x1(t *testing.T) {
+	// RGB555 full red: r5=0x1f → packed 0x7c00 → wire hi=0x7c lo=0x00
+	// Expand: R = (0x1f<<3)|(0x1f>>2) = 0xff
+	stream := []byte{
+		0x20, 0x20, 0x5a, 0x4c, // magic
+		0x00, 0x01, 0x00, 0x01, // version
+		0x00, 0x00, 0x00, 0x06, // RGB16
+		0x00, 0x00, 0x00, 0x01, // w
+		0x00, 0x00, 0x00, 0x01, // h
+		0x00, 0x00, 0x00, 0x02, // stride
+		0x00, 0x00, 0x00, 0x01, // top_down
+		0x00,       // 1 literal
+		0x7c, 0x00, // RGB555 red
+	}
+	img, err := codec.DecodeLZRGB(payloadFromStream(stream), 1, 1)
+	if err != nil {
+		t.Fatalf("rgb16 golden: %v", err)
+	}
+	if img.Pix[0] != 0xff || img.Pix[1] != 0x00 || img.Pix[2] != 0x00 || img.Pix[3] != 0xff {
+		t.Fatalf("pixel=%02x%02x%02x%02x want ff0000ff",
+			img.Pix[0], img.Pix[1], img.Pix[2], img.Pix[3])
+	}
+}
+
+func TestDecodeLZRGB16SolidRLE(t *testing.T) {
+	// 2×2 solid green RGB555: g5=0x1f → 0x03e0 → hi=0x03 lo=0xe0
+	// Expand G = (0x1f<<3)|(0x1f>>2) = 0xff
+	// Stream: 1 literal + RLE match len=3 ofs=1 (RGB16 bias +2 → ctrl>>5 field = 1 for final len 3?
+	// final_len = (ctrl>>5 - 1) + 2 = ctrl>>5 + 1. Want final=3 → ctrl>>5 = 2.
+	// ctrl = (2<<5)|0 = 0x40, ofs byte 0 → final ofs 1.
+	var body []byte
+	body = append(body, 0x00, 0x03, 0xe0) // 1 literal green
+	body = append(body, 0x40, 0x00)       // match len=3 ofs=1
+	stream := append(packLZHeader(6 /*RGB16*/, 2, 2, 4, 1), body...)
+	img, err := codec.DecodeLZRGB(payloadFromStream(stream), 2, 2)
+	if err != nil {
+		t.Fatalf("rgb16 rle: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		off := i * 4
+		if img.Pix[off] != 0x00 || img.Pix[off+1] != 0xff || img.Pix[off+2] != 0x00 || img.Pix[off+3] != 0xff {
+			t.Fatalf("pixel[%d]=%02x%02x%02x%02x want 00ff00ff", i,
+				img.Pix[off], img.Pix[off+1], img.Pix[off+2], img.Pix[off+3])
+		}
+	}
+}
+
+func TestDecodeLZRGBDictBackref(t *testing.T) {
+	// Non-RLE dictionary: [A, B] then match ofs=2 len=2 → [A, B, A, B].
+	// A = red (BGR 00 00 ff), B = blue (BGR ff 00 00)
+	// 2 literals: ctrl=1
+	// match len=2 ofs=2: final_len=(ctrl>>5-1)+1 = ctrl>>5 → want 2 → ctrl high=2
+	// stored ofs = 1 (code=1): ctrl low=0, code=1
+	body := []byte{
+		0x01,             // 2 literals
+		0x00, 0x00, 0xff, // A red
+		0xff, 0x00, 0x00, // B blue
+		0x40, 0x01, // match len=2 ofs=2
+	}
+	stream := append(packLZHeader(8, 2, 2, 8, 1), body...)
+	img, err := codec.DecodeLZRGB(payloadFromStream(stream), 2, 2)
+	if err != nil {
+		t.Fatalf("dict backref: %v", err)
+	}
+	want := [][3]byte{
+		{0xff, 0x00, 0x00}, // A red
+		{0x00, 0x00, 0xff}, // B blue
+		{0xff, 0x00, 0x00}, // A
+		{0x00, 0x00, 0xff}, // B
+	}
+	for i, c := range want {
+		off := i * 4
+		if img.Pix[off] != c[0] || img.Pix[off+1] != c[1] || img.Pix[off+2] != c[2] || img.Pix[off+3] != 0xff {
+			t.Fatalf("pixel[%d]=%02x%02x%02x%02x want %02x%02x%02xff",
+				i, img.Pix[off], img.Pix[off+1], img.Pix[off+2], img.Pix[off+3], c[0], c[1], c[2])
+		}
+	}
+}
+
+func TestDecodeLZRGBFarDistance(t *testing.T) {
+	// Far distance triggers when (ctrl&31)==31 and code==255, then
+	// ofs = (hi<<8|lo) + MAX_DISTANCE(8191), then +1 bias.
+	// Minimal far distance: hi=lo=0 → final ofs = 8192.
+	// Image 8192×2: first row solid red via RLE, second row first pixel via far match.
+	const w, h = 8192, 2
+	var body []byte
+	// 1 literal red + long RLE for remaining 8191 of first row… but RLE only covers
+	// consecutive matches of the previous pixel. Emit: 1 lit + match len 8191 ofs=1.
+	// final_len for RGB32 with extension: length starts as 6 after --, +extra +1 bias.
+	// Want final=8191 → after bias length_before_bias+1=8191 → length_before_bias=8190
+	// After -- from field 7: length=6; need 8190-6=8184 more from extension bytes.
+	body = append(body, 0x00, 0x00, 0x00, 0xff) // red literal
+	// ctrl with len field 7, ofs high 0: 0xe0
+	body = append(body, 0xe0)
+	// Extension: 8184 = 32*255 + 24 → thirty-two 0xFF then 0x18
+	extra := 8184
+	for extra >= 255 {
+		body = append(body, 255)
+		extra -= 255
+	}
+	body = append(body, byte(extra))
+	body = append(body, 0x00) // ofs low → final ofs 1 (RLE)
+
+	// Far match: len=1, ofs=8192. ctrl = (1<<5)|31 = 0x3f, code=0xff, hi=0, lo=0
+	// Then 8191 more RLE of that pixel to fill the second row, or one far match of 8192.
+	// Single far match of length 8192:
+	// final=8192 → length_before_bias=8191; field 7 → 6 + ext; ext=8185
+	body = append(body, 0xff) // ctrl: len field 7, ofs high 31 → (7<<5)|31 = 0xff
+	extra = 8185
+	for extra >= 255 {
+		body = append(body, 255)
+		extra -= 255
+	}
+	body = append(body, byte(extra))
+	body = append(body, 0xff, 0x00, 0x00) // far distance code + hi + lo
+
+	stream := append(packLZHeader(8, w, h, w*4, 1), body...)
+	img, err := codec.DecodeLZRGB(payloadFromStream(stream), w, h)
+	if err != nil {
+		t.Fatalf("far distance: %v", err)
+	}
+	if img.Width != w || img.Height != h {
+		t.Fatalf("dims %dx%d", img.Width, img.Height)
+	}
+	// Every pixel red opaque
+	for i := 0; i < w*h; i++ {
+		off := i * 4
+		if img.Pix[off] != 0xff || img.Pix[off+1] != 0x00 || img.Pix[off+2] != 0x00 || img.Pix[off+3] != 0xff {
+			t.Fatalf("pixel[%d]=%02x%02x%02x%02x want ff0000ff", i,
+				img.Pix[off], img.Pix[off+1], img.Pix[off+2], img.Pix[off+3])
+		}
+	}
+}
+
+func TestDecodeLZRGBMatchLenOverflow(t *testing.T) {
+	// Malicious stream: ctrl with max length field + many 0xFF extension bytes
+	// that would wrap a uint32 length. Decoder must reject, not wrap.
+	var body []byte
+	body = append(body, 0x00, 0x00, 0x00, 0xff) // 1 red literal so a match is legal at op=1
+	// Match with len field 7 and ~20×0xFF would yield huge length; remaining is 0 after 1×1.
+	// Use 1×2 image so remaining=1 after first literal — any extended match >1 fails.
+	body = append(body, 0xe0) // len field 7, ofs high 0
+	// Enough 0xFF to exceed remaining before bias even without wrap
+	for i := 0; i < 8; i++ {
+		body = append(body, 255)
+	}
+	body = append(body, 0)    // terminate extension with non-0xFF (won't be reached if capped early)
+	body = append(body, 0x00) // ofs
+
+	stream := append(packLZHeader(8, 1, 2, 4, 1), body...)
+	_, err := codec.DecodeLZRGB(payloadFromStream(stream), 1, 2)
+	if err == nil {
+		t.Fatal("expected match length overflow error")
+	}
+}
+
+func TestDecodeLZRGBDimMismatch(t *testing.T) {
+	stream := encodeLZRGB32Literals(2, 2, true, make([]byte, 16))
+	_, err := codec.DecodeLZRGB(payloadFromStream(stream), 3, 2)
+	if err == nil {
+		t.Fatal("expected width mismatch")
+	}
+}
+
+func TestDecodeLZRGBBadVersion(t *testing.T) {
+	stream := packLZHeader(8, 1, 1, 4, 1)
+	binary.BigEndian.PutUint32(stream[4:8], 0x00020000) // bad version
+	stream = append(stream, 0x00, 0x00, 0x00, 0x00)
+	_, err := codec.DecodeLZRGB(payloadFromStream(stream), 1, 1)
+	if err == nil {
+		t.Fatal("expected bad version")
+	}
+}
+
+func TestDecodeLZRGBUnsupportedType(t *testing.T) {
+	// Palette type inside LZ_RGB stream header is not supported here.
+	stream := packLZHeader(5 /*PLT8*/, 1, 1, 1, 1)
+	stream = append(stream, 0x00, 0x00)
+	_, err := codec.DecodeLZRGB(payloadFromStream(stream), 1, 1)
+	if err == nil {
+		t.Fatal("expected unsupported lz type")
+	}
+}
