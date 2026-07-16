@@ -3,5 +3,6 @@
 // Consumers obtain a session via Connect / ConnectConfig types
 // (to be implemented). Implementation lives under internal/*.
 //
-// Import rules: this package may import internal/* as needed.
+// Import rules: may import internal/* as needed, but not internal/ui
+// or GUI toolkits (library-first; UI stays in internal/ui).
 package spice

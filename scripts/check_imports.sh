@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # check_imports.sh — enforce package import boundaries for virt-viewer.
 #
-# Rules (from docs/design-spice-viewer-go.md):
+# Rules (from docs/design-spice-viewer-go.md, hardened for CI):
 #   cmd/remote-viewer  → pkg/*, internal/ui, internal/ux only
-#   pkg/spice          → may import internal/*
+#   pkg/spice          → may import internal/* except UI / GUI toolkits
 #   pkg/vvfile         → stdlib only (no internal/, no UI)
-#   internal/protocol, connector, codec, session, channel → no UI
+#   Non-UI packages    → no internal/ui and no GUI toolkits
+#     (connector, protocol, session, channel, codec, display, security, ux)
 #   internal/ui        → pkg/spice, pkg/vvfile, internal/ux (plus stdlib)
 #
 # Exit 0 if clean; non-zero if any violation is found.
@@ -17,19 +18,38 @@ cd "$ROOT"
 MODULE="github.com/maskraven/virt-viewer"
 failed=0
 
-# List import paths used by packages matching a pattern (relative or module path).
-# Args: package pattern (go list style, e.g. ./cmd/...)
+# Non-UI packages that must not import UI (design table + architectural peers).
+# Keep this list in sync with package doc comments and the design doc.
+NO_UI_PACKAGES=(
+  connector
+  protocol
+  session
+  channel
+  codec
+  display
+  security
+  ux
+)
+
+# List import paths used by packages matching a pattern (go list style).
+# Includes production, test, and external-test imports so _test.go cannot
+# smuggle forbidden dependencies past CI.
 imports_of() {
   local pattern="$1"
-  go list -f '{{range .Imports}}{{println .}}{{end}}' "$pattern" 2>/dev/null | sort -u
+  local out
+  if ! out="$(go list -f '{{range .Imports}}{{println .}}{{end}}{{range .TestImports}}{{println .}}{{end}}{{range .XTestImports}}{{println .}}{{end}}' "$pattern")"; then
+    echo "FAIL: go list failed for pattern: $pattern" >&2
+    exit 1
+  fi
+  printf '%s\n' "$out" | sort -u
 }
 
-# True if import path is a UI package we treat as forbidden for core stacks.
+# True if import path is a UI package we treat as forbidden for non-UI stacks.
 is_ui_import() {
   local imp="$1"
   case "$imp" in
     "${MODULE}/internal/ui" | "${MODULE}/internal/ui/"*) return 0 ;;
-    # Common GUI toolkits — keep core free of them.
+    # Common GUI toolkits — keep core/library free of them.
     fyne.io/* | gioui.org/* | github.com/andlabs/ui | github.com/gotk3/*) return 0 ;;
   esac
   return 1
@@ -39,7 +59,6 @@ is_ui_import() {
 echo "==> checking cmd/remote-viewer imports"
 while IFS= read -r imp; do
   [ -z "$imp" ] && continue
-  # stdlib / toolchain: no dots in first path element typically; allow all non-module
   case "$imp" in
     "${MODULE}/pkg/"* | \
     "${MODULE}/internal/ui" | "${MODULE}/internal/ui/"* | \
@@ -52,6 +71,16 @@ while IFS= read -r imp; do
       ;;
   esac
 done < <(imports_of ./cmd/...)
+
+# --- pkg/spice: may use internal/* but not UI / GUI toolkits ---
+echo "==> checking pkg/spice imports (no UI)"
+while IFS= read -r imp; do
+  [ -z "$imp" ] && continue
+  if is_ui_import "$imp"; then
+    echo "FAIL: pkg/spice must not import UI package $imp"
+    failed=1
+  fi
+done < <(imports_of ./pkg/spice/...)
 
 # --- pkg/vvfile: no internal, no UI ---
 echo "==> checking pkg/vvfile imports"
@@ -69,8 +98,8 @@ while IFS= read -r imp; do
   fi
 done < <(imports_of ./pkg/vvfile/...)
 
-# --- internal core stacks: no UI ---
-for core in connector protocol session channel codec; do
+# --- Non-UI internal packages: no UI ---
+for core in "${NO_UI_PACKAGES[@]}"; do
   if [ ! -d "internal/$core" ]; then
     continue
   fi

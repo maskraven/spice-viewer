@@ -1,0 +1,18 @@
+# Built binaries (README: go build -o remote-viewer ./cmd/remote-viewer)
+/remote-viewer
+/remote-viewer.exe
+*.exe
+
+# Go test / coverage artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+profile.cov
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
