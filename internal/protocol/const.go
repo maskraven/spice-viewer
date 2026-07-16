@@ -143,3 +143,139 @@ const MiniHeaderSize = 6
 
 // DataHeaderSize is sizeof(SpiceDataHeader): serial u64 + type u16 + size u32 + sub_list u32.
 const DataHeaderSize = 18
+
+// Display channel server messages (spice/enums.h @ 499cc8326a672e9e5747efc017319b19e1594b42).
+const (
+	MsgDisplayMode             uint16 = 101 // SPICE_MSG_DISPLAY_MODE
+	MsgDisplayMark             uint16 = 102 // SPICE_MSG_DISPLAY_MARK
+	MsgDisplayReset            uint16 = 103 // SPICE_MSG_DISPLAY_RESET
+	MsgDisplayCopyBits         uint16 = 104
+	MsgDisplayInvalList        uint16 = 105
+	MsgDisplayInvalAllPixmaps  uint16 = 106
+	MsgDisplayInvalPalette     uint16 = 107
+	MsgDisplayInvalAllPalettes uint16 = 108
+	MsgDisplayStreamCreate     uint16 = 122
+	MsgDisplayStreamData       uint16 = 123
+	MsgDisplayStreamClip       uint16 = 124
+	MsgDisplayStreamDestroy    uint16 = 125
+	MsgDisplayStreamDestroyAll uint16 = 126
+	MsgDisplayDrawFill         uint16 = 302 // SPICE_MSG_DISPLAY_DRAW_FILL
+	MsgDisplayDrawOpaque       uint16 = 303
+	MsgDisplayDrawCopy         uint16 = 304 // SPICE_MSG_DISPLAY_DRAW_COPY
+	MsgDisplayDrawBlend        uint16 = 305
+	MsgDisplayDrawBlackness    uint16 = 306
+	MsgDisplayDrawWhiteness    uint16 = 307
+	MsgDisplayDrawInvers       uint16 = 308
+	MsgDisplayDrawRop3         uint16 = 309
+	MsgDisplayDrawStroke       uint16 = 310
+	MsgDisplayDrawText         uint16 = 311
+	MsgDisplayDrawTransparent  uint16 = 312
+	MsgDisplayDrawAlphaBlend   uint16 = 313
+	MsgDisplaySurfaceCreate    uint16 = 314 // SPICE_MSG_DISPLAY_SURFACE_CREATE
+	MsgDisplaySurfaceDestroy   uint16 = 315 // SPICE_MSG_DISPLAY_SURFACE_DESTROY
+	MsgDisplayStreamDataSized  uint16 = 316
+	MsgDisplayMonitorsConfig   uint16 = 317
+	MsgDisplayDrawComposite    uint16 = 318
+)
+
+// Display channel client messages.
+const (
+	MsgcDisplayInit uint16 = 101 // SPICE_MSGC_DISPLAY_INIT
+)
+
+// DisplayInitBodySize is sizeof(SpiceMsgcDisplayInit): 14 bytes.
+// pixmap_cache_id u8 + pixmap_cache_size i64 + glz_dictionary_id u8 + glz_dictionary_window_size i32.
+const DisplayInitBodySize = 14
+
+// Image types (SpiceImageType).
+const (
+	ImageTypeBitmap            uint8 = 0
+	ImageTypeQuic              uint8 = 1
+	ImageTypeLZPLT             uint8 = 100
+	ImageTypeLZRGB             uint8 = 101
+	ImageTypeGLZRGB            uint8 = 102
+	ImageTypeFromCache         uint8 = 103
+	ImageTypeSurface           uint8 = 104
+	ImageTypeJPEG              uint8 = 105
+	ImageTypeFromCacheLossless uint8 = 106
+	ImageTypeZlibGLZRGB        uint8 = 107
+	ImageTypeJPEGAlpha         uint8 = 108
+)
+
+// Bitmap formats (SpiceBitmapFmt).
+const (
+	BitmapFmtInvalid uint8 = 0
+	BitmapFmt1BitLE  uint8 = 1
+	BitmapFmt1BitBE  uint8 = 2
+	BitmapFmt4BitLE  uint8 = 3
+	BitmapFmt4BitBE  uint8 = 4
+	BitmapFmt8Bit    uint8 = 5
+	BitmapFmt16Bit   uint8 = 6
+	BitmapFmt24Bit   uint8 = 7
+	BitmapFmt32Bit   uint8 = 8
+	BitmapFmtRGBA    uint8 = 9
+	BitmapFmt8BitA   uint8 = 10
+)
+
+// Bitmap flags (SpiceBitmapFlags).
+const (
+	BitmapFlagPalCacheMe   uint8 = 1 << 0
+	BitmapFlagPalFromCache uint8 = 1 << 1
+	BitmapFlagTopDown      uint8 = 1 << 2
+)
+
+// Surface formats (SpiceSurfaceFmt).
+const (
+	SurfaceFmtInvalid uint32 = 0
+	SurfaceFmt1A      uint32 = 1
+	SurfaceFmt8A      uint32 = 8
+	SurfaceFmt16555   uint32 = 16
+	SurfaceFmt32xRGB  uint32 = 32
+	SurfaceFmt16565   uint32 = 80
+	SurfaceFmt32ARGB  uint32 = 96
+)
+
+// Surface flags (SpiceSurfaceFlags).
+const (
+	SurfaceFlagPrimary uint32 = 1 << 0
+)
+
+// Clip types (SpiceClipType).
+const (
+	ClipTypeNone  uint8 = 0
+	ClipTypeRects uint8 = 1
+)
+
+// Brush types (SpiceBrushType).
+const (
+	BrushTypeNone    uint8 = 0
+	BrushTypeSolid   uint8 = 1
+	BrushTypePattern uint8 = 2
+)
+
+// ROP descriptors (SpiceRopd) — Phase 1 uses OP_PUT.
+const (
+	RopdInversSrc   uint16 = 1 << 0
+	RopdInversBrush uint16 = 1 << 1
+	RopdInversDest  uint16 = 1 << 2
+	RopdOpPut       uint16 = 1 << 3
+	RopdOpOr        uint16 = 1 << 4
+	RopdOpAnd       uint16 = 1 << 5
+	RopdOpXor       uint16 = 1 << 6
+	RopdOpBlackness uint16 = 1 << 7
+	RopdOpWhiteness uint16 = 1 << 8
+	RopdOpInvers    uint16 = 1 << 9
+	RopdInversRes   uint16 = 1 << 10
+)
+
+// Surface size bounds (design: max side 8192; max bytes 64 MiB).
+const (
+	MaxSurfaceSide  = 8192
+	MaxSurfaceBytes = 64 << 20 // 64 MiB
+)
+
+// SpiceImageDescSize is sizeof(SpiceImageDescriptor): id u64 + type u8 + flags u8 + w u32 + h u32.
+const SpiceImageDescSize = 18
+
+// SurfaceCreateSize is sizeof(SpiceMsgSurfaceCreate): 5 × uint32.
+const SurfaceCreateSize = 20
