@@ -1,0 +1,17 @@
+[virt-viewer]
+type=spice
+host=pvespiceproxy:687d1ec6:10016:pve::dcc9e35662ef0b1233e12ac02880ea7851f9218e
+host-subject=OU=PVE Cluster Node,O=Proxmox Virtual Environment,CN=pve.example.com
+tls-port=61002
+password=PVE:shortlivedticketvalue0123456789abcdef
+proxy=http://proxmox.example.com:3128
+ca=-----BEGIN CERTIFICATE-----\nMIIDummyCertForFixtureOnlyNotRealPEMDataABCDE=\n-----END CERTIFICATE-----\n
+title=VM 10016 - debian-spice
+delete-this-file=1
+secure-attention=Ctrl+Alt+Ins
+release-cursor=Ctrl+Alt+R
+toggle-fullscreen=Shift+F11
+fullscreen=0
+enable-usbredir=1
+secure-channels=main,inputs
+version=1.0
