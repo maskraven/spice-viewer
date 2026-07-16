@@ -350,6 +350,165 @@ func TestParseFileOpenMissing(t *testing.T) {
 	}
 }
 
+func TestParseFileDeleteErrWhenRemoveDenied(t *testing.T) {
+	// Replace the path with a non-empty directory so os.Remove fails
+	// (ENOTEMPTY / EISDIR). Parse still succeeds; DeleteErr is set.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "locked.vv")
+	content := minimalVV(t, map[string]string{
+		"delete-this-file": "1",
+		"password":         "ticket-still-usable",
+	})
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Read via Parse first into a copy, then turn path into a non-empty dir
+	// that still has the same name — but ParseFile opens the path itself.
+	// Strategy: write file, parse with DeleteIfRequested after swapping
+	// the file for a non-empty directory at the same path is racy.
+	// Instead: open by parsing content into a temp file, then for delete
+	// use a path that is a directory.
+	//
+	// Worked approach: write the .vv, copy bytes, remove file, mkdir path,
+	// put a child inside, then we need ParseFile to open path — so path
+	// must be a readable file at open time.
+	//
+	// Use a file whose parent we make unwritable after open is impossible
+	// without hooks. Simplest portable approach on Unix:
+	// 1. Write .vv at path
+	// 2. ParseFile reads and then Remove fails if we chmod 0 the parent
+	//    before delete — but ParseFile opens then closes before delete,
+	//    so chmod parent to 0 after we can't intercept mid-function.
+	//
+	// Alternative: make path a directory from the start — open fails.
+	//
+	// Use: file on a read-only directory. Create file, chmod dir 0500,
+	// call ParseFile (open works if we own it; remove needs write on dir).
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(dir, 0o700)
+	})
+
+	f, err := vvfile.ParseFile(path, vvfile.ParseOptions{DeleteIfRequested: true})
+	if err != nil {
+		// On some platforms (root, weird FS) open/remove may still succeed.
+		// Fall back: if delete somehow worked, skip.
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if f.Deleted {
+		// Running as root or on a FS that allows remove under 0500.
+		t.Skip("remove succeeded under restricted dir; cannot force DeleteErr")
+	}
+	if f.DeleteErr == nil {
+		t.Fatal("expected DeleteErr when remove denied")
+	}
+	if string(f.Password) != "ticket-still-usable" {
+		t.Errorf("password should remain usable, got %q", f.Password)
+	}
+	// File still on disk.
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("file should remain after failed delete: %v", err)
+	}
+}
+
+func TestFirstVirtViewerSectionOnly(t *testing.T) {
+	content := `[virt-viewer]
+type=spice
+host=first-host
+tls-port=1
+password=first-pass
+ca=-----BEGIN-----\n-----END-----\n
+
+[other]
+host=ignored
+
+[virt-viewer]
+host=second-host
+password=second-pass
+`
+	f, err := vvfile.Parse(strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if f.Host != "first-host" {
+		t.Errorf("Host = %q, want first section only", f.Host)
+	}
+	if string(f.Password) != "first-pass" {
+		t.Errorf("Password = %q, want first section only", f.Password)
+	}
+}
+
+func TestPasswordTrailingWhitespacePreserved(t *testing.T) {
+	// Password value ends with spaces/tabs; must not be stripped.
+	content := "[virt-viewer]\ntype=spice\nhost=h\nport=5900\npassword=secret  \t\n"
+	f, err := vvfile.Parse(strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := "secret  \t"
+	if string(f.Password) != want {
+		t.Errorf("Password = %q, want %q", f.Password, want)
+	}
+}
+
+func TestHostLengthLimits(t *testing.T) {
+	ok := strings.Repeat("h", vvfile.MaxHostLen)
+	content := minimalVV(t, map[string]string{"host": ok, "password": "p"})
+	if _, err := vvfile.Parse(strings.NewReader(content)); err != nil {
+		t.Fatalf("exact max host should pass: %v", err)
+	}
+
+	tooLong := strings.Repeat("h", vvfile.MaxHostLen+1)
+	content = minimalVV(t, map[string]string{"host": tooLong, "password": "p"})
+	if _, err := vvfile.Parse(strings.NewReader(content)); err == nil {
+		t.Fatal("expected host length error")
+	} else if !strings.Contains(err.Error(), "host") {
+		t.Errorf("error should mention host: %v", err)
+	}
+}
+
+func TestHostSubjectLengthLimits(t *testing.T) {
+	ok := strings.Repeat("s", vvfile.MaxHostSubjectLen)
+	content := minimalVV(t, map[string]string{"host-subject": ok, "password": "p"})
+	if _, err := vvfile.Parse(strings.NewReader(content)); err != nil {
+		t.Fatalf("exact max host-subject should pass: %v", err)
+	}
+
+	tooLong := strings.Repeat("s", vvfile.MaxHostSubjectLen+1)
+	content = minimalVV(t, map[string]string{"host-subject": tooLong, "password": "p"})
+	if _, err := vvfile.Parse(strings.NewReader(content)); err == nil {
+		t.Fatal("expected host-subject length error")
+	} else if !strings.Contains(err.Error(), "host-subject") {
+		t.Errorf("error should mention host-subject: %v", err)
+	}
+}
+
+func TestFileSizeLimit(t *testing.T) {
+	// Build a document larger than MaxFileSize.
+	var b strings.Builder
+	b.WriteString("[virt-viewer]\ntype=spice\nhost=h\nport=1\npassword=p\n")
+	// Pad with ignored keys / comments until over limit.
+	pad := vvfile.MaxFileSize - b.Len() + 1
+	if pad < 1 {
+		pad = 1
+	}
+	b.WriteString("#")
+	b.WriteString(strings.Repeat("x", pad))
+	b.WriteByte('\n')
+	if b.Len() <= vvfile.MaxFileSize {
+		t.Fatalf("test setup: body len %d not > MaxFileSize", b.Len())
+	}
+	_, err := vvfile.Parse(strings.NewReader(b.String()))
+	if err == nil {
+		t.Fatal("expected file size error")
+	}
+	if !strings.Contains(err.Error(), "max size") {
+		t.Errorf("error should mention max size: %v", err)
+	}
+}
+
 func minimalVV(t *testing.T, overrides map[string]string) string {
 	t.Helper()
 	m := map[string]string{

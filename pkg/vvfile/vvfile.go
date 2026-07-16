@@ -14,13 +14,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
-// Password and payload limits. MaxPasswordLen matches spice-protocol
-// SPICE_MAX_PASSWORD_LENGTH (60). RSA-OAEP-SHA1 allows up to 85 bytes of
-// plaintext including a trailing NUL; we reject anything above the protocol
-// limit so Proxmox / QEMU interop stays well-defined.
+// Password and payload limits.
+//
+// MaxPasswordLen is SPICE_MAX_PASSWORD_LENGTH from spice-protocol (60).
+// RSA-OAEP-SHA1 with a 1024-bit SPICE link key allows up to 85 bytes of
+// plaintext including a trailing NUL (design “OAEP budget”), but QEMU,
+// spice-gtk, and Proxmox ticket encryption use the protocol max of 60.
+// Keep this aligned with internal/security MaxSpicePasswordLen so parse
+// and EncryptSpiceTicket reject the same oversize tickets.
 const (
 	MaxPasswordLen    = 60
 	MaxHostLen        = 512
@@ -125,12 +128,38 @@ func removeWithRetry(path string) error {
 	if err == nil {
 		return nil
 	}
-	// Browsers on Windows may briefly lock the download; retry once.
+	// Permanent / non-retryable: already gone, or wrong type (e.g. directory).
+	if os.IsNotExist(err) || isNotFileRemoveErr(err) {
+		return err
+	}
+	// Browsers on Windows may briefly lock the download; retry once on
+	// permission/lock-style failures only (skip sleep for other errors).
+	if !errors.Is(err, os.ErrPermission) && !isBusyRemoveErr(err) {
+		return err
+	}
 	time.Sleep(100 * time.Millisecond)
 	if err2 := os.Remove(path); err2 == nil {
 		return nil
 	}
 	return err
+}
+
+// isNotFileRemoveErr reports errors that will not succeed on retry
+// (directory not empty / is a directory).
+func isNotFileRemoveErr(err error) bool {
+	// Unix: EISDIR / ENOTEMPTY surface as PathError with those semantics.
+	// Match common substrings without importing x/sys.
+	msg := err.Error()
+	return strings.Contains(msg, "directory not empty") ||
+		strings.Contains(msg, "is a directory")
+}
+
+// isBusyRemoveErr is best-effort detection of transient file locks.
+func isBusyRemoveErr(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "busy") ||
+		strings.Contains(msg, "locked") ||
+		strings.Contains(msg, "being used")
 }
 
 func parseBytes(data []byte) (*File, error) {
@@ -168,7 +197,7 @@ func parseBytes(data []byte) (*File, error) {
 			if strings.TrimSpace(v) == "" {
 				continue
 			}
-			u, err := url.Parse(v)
+			u, err := url.Parse(strings.TrimSpace(v))
 			if err != nil {
 				return nil, fmt.Errorf("vvfile: invalid proxy URL: %w", err)
 			}
@@ -255,9 +284,10 @@ func isTruthy(v string) bool {
 	}
 }
 
-// parseINISection extracts key/value pairs from the named section.
-// Only the first matching section is used. Keys are lowercased.
-// Duplicate keys: last value wins. Lines outside the section are ignored.
+// parseINISection extracts key/value pairs from the first named section only.
+// Keys are lowercased. Duplicate keys within that section: last value wins.
+// Later sections with the same name are ignored. Lines outside the section
+// are ignored.
 func parseINISection(data []byte, section string) (map[string]string, error) {
 	want := strings.ToLower(section)
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -267,15 +297,29 @@ func parseINISection(data []byte, section string) (map[string]string, error) {
 	keys := make(map[string]string)
 	inSection := false
 	found := false
+	// After the first matching section ends, do not re-enter another match.
+	done := false
 
 	for sc.Scan() {
-		line := strings.TrimRightFunc(sc.Text(), unicode.IsSpace)
-		trimmed := strings.TrimSpace(line)
+		// Scanner strips the line ending; keep value trailing spaces.
+		// Only strip a trailing CR that can remain from CRLF files.
+		raw := strings.TrimSuffix(sc.Text(), "\r")
+		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			name := strings.ToLower(strings.TrimSpace(trimmed[1 : len(trimmed)-1]))
+			if found && inSection {
+				// Leaving the first matching section — stop accepting keys.
+				inSection = false
+				done = true
+				continue
+			}
+			if done {
+				inSection = false
+				continue
+			}
 			inSection = name == want
 			if inSection {
 				found = true
@@ -285,19 +329,19 @@ func parseINISection(data []byte, section string) (map[string]string, error) {
 		if !inSection {
 			continue
 		}
-		eq := strings.IndexByte(line, '=')
+		eq := strings.IndexByte(raw, '=')
 		if eq < 0 {
 			// Ignore non key=value lines inside section.
 			continue
 		}
-		k := strings.ToLower(strings.TrimSpace(line[:eq]))
-		v := line[eq+1:] // preserve password/value as-is after '='
-		// Trim only a single leading space after '=' (common in hand-edited files).
+		k := strings.ToLower(strings.TrimSpace(raw[:eq]))
+		// Preserve value as-is after '=' (including trailing whitespace),
+		// except a single optional leading space after '=' (hand-edited files)
+		// and a leftover CR already stripped from the line.
+		v := raw[eq+1:]
 		if len(v) > 0 && v[0] == ' ' {
 			v = v[1:]
 		}
-		// Trailing CR from CRLF files.
-		v = strings.TrimSuffix(v, "\r")
 		if k == "" {
 			continue
 		}
