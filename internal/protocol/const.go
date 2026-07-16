@@ -142,6 +142,80 @@ const (
 	MsgcMainAgentToken          uint16 = 108
 )
 
+// Inputs channel server messages (spice/enums.h).
+const (
+	MsgInputsInit           uint16 = 101 // SPICE_MSG_INPUTS_INIT
+	MsgInputsKeyModifiers   uint16 = 102 // SPICE_MSG_INPUTS_KEY_MODIFIERS
+	MsgInputsMouseMotionAck uint16 = 111 // SPICE_MSG_INPUTS_MOUSE_MOTION_ACK
+)
+
+// Inputs channel client messages.
+const (
+	MsgcInputsKeyDown       uint16 = 101 // SPICE_MSGC_INPUTS_KEY_DOWN
+	MsgcInputsKeyUp         uint16 = 102 // SPICE_MSGC_INPUTS_KEY_UP
+	MsgcInputsKeyModifiers  uint16 = 103 // SPICE_MSGC_INPUTS_KEY_MODIFIERS
+	MsgcInputsKeyScancode   uint16 = 104 // SPICE_MSGC_INPUTS_KEY_SCANCODE (cap)
+	MsgcInputsMouseMotion   uint16 = 111 // SPICE_MSGC_INPUTS_MOUSE_MOTION
+	MsgcInputsMousePosition uint16 = 112 // SPICE_MSGC_INPUTS_MOUSE_POSITION
+	MsgcInputsMousePress    uint16 = 113 // SPICE_MSGC_INPUTS_MOUSE_PRESS
+	MsgcInputsMouseRelease  uint16 = 114 // SPICE_MSGC_INPUTS_MOUSE_RELEASE
+)
+
+// Mouse modes (SPICE_MOUSE_MODE_*; bit flags, also used as current mode value).
+const (
+	MouseModeServer uint32 = 1 << 0 // SPICE_MOUSE_MODE_SERVER
+	MouseModeClient uint32 = 1 << 1 // SPICE_MOUSE_MODE_CLIENT
+)
+
+// Keyboard LED / modifier bits (flags16 keyboard_modifier_flags).
+const (
+	ScrollLockModifier uint16 = 1 << 0 // SPICE_SCROLL_LOCK_MODIFIER
+	NumLockModifier    uint16 = 1 << 1 // SPICE_NUM_LOCK_MODIFIER
+	CapsLockModifier   uint16 = 1 << 2 // SPICE_CAPS_LOCK_MODIFIER
+)
+
+// Mouse button IDs (enum8 mouse_button).
+const (
+	MouseButtonInvalid uint8 = 0
+	MouseButtonLeft    uint8 = 1
+	MouseButtonMiddle  uint8 = 2
+	MouseButtonRight   uint8 = 3
+	MouseButtonUp      uint8 = 4 // scroll wheel up
+	MouseButtonDown    uint8 = 5 // scroll wheel down
+	MouseButtonSide    uint8 = 6
+	MouseButtonExtra   uint8 = 7
+)
+
+// Mouse button mask bits (flags16 mouse_button_mask).
+const (
+	MouseButtonMaskLeft   uint16 = 1 << 0
+	MouseButtonMaskMiddle uint16 = 1 << 1
+	MouseButtonMaskRight  uint16 = 1 << 2
+	MouseButtonMaskUp     uint16 = 1 << 3
+	MouseButtonMaskDown   uint16 = 1 << 4
+	MouseButtonMaskSide   uint16 = 1 << 5
+	MouseButtonMaskExtra  uint16 = 1 << 6
+)
+
+// InputMotionAckBunch is SPICE_INPUT_MOTION_ACK_BUNCH (server acks every N motions).
+const InputMotionAckBunch = 4
+
+// Inputs channel capability bit indices.
+const (
+	InputsCapKeyScancode = 0 // SPICE_INPUTS_CAP_KEY_SCANCODE
+)
+
+// Wire body sizes (packed, little-endian; from spice.proto).
+const (
+	KeyCodeSize          = 4  // uint32 code
+	KeyModifiersSize     = 2  // flags16
+	MouseMotionSize      = 10 // int32 dx + int32 dy + flags16 buttons
+	MousePositionSize    = 11 // uint32 x + uint32 y + flags16 buttons + uint8 display_id
+	MouseButtonEventSize = 3  // enum8 button + flags16 buttons_state
+	MainMouseModeSize    = 4  // flags16 supported + flags16 current
+	MainMouseModeReqSize = 2  // flags16 mode
+)
+
 // MainInitSize is sizeof(SpiceMsgMainInit): 8 × uint32.
 const MainInitSize = 32
 
