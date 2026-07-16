@@ -2,32 +2,92 @@
 
 A greenfield, library-first [SPICE](https://www.spice-space.org/) remote display client written in Go.
 
-## Status
+**Module:** `github.com/maskraven/virt-viewer` · **License:** [Apache-2.0](LICENSE) · **CLI:** `remote-viewer`
 
-**Pre-v0.1 / scaffold.** This repository is under active development. There is no released protocol implementation yet. Package layout and CI are in place; connect, session, and UI work follow in later milestones.
+## Status — v0.1 (Phase 1)
+
+**v0.1** is the Phase 1 Proxmox MVP cut line:
+
+| Area | State |
+|------|--------|
+| Parse Proxmox / virt-viewer `.vv` | Implemented (`pkg/vvfile`) |
+| HTTP CONNECT spiceproxy + TLS CA + `host-subject` pin | Implemented (`internal/connector`) |
+| AuthSpice ticket, multi-channel session | Implemented (`pkg/spice`, session/channel) |
+| Display (raw + LZ), inputs, cursor best-effort | Implemented |
+| GUI (`remote-viewer`) + headless (`--headless`) | Implemented (Fyne + NullDriver) |
+| Automated tests (`go test ./...`) + CI | Required green |
+| Live Proxmox lab acceptance | **Pending operator sign-off** (not in CI) |
+
+There is **no** auto-reconnect for short-lived tickets: after expiry or disconnect, open Console again in Proxmox for a new `.vv`.
+
+Acceptance and tag readiness: [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md).  
+Changelog: [CHANGELOG.md](CHANGELOG.md).
 
 ## Goals (product)
 
-- **Proxmox-first**: open a downloaded `pve-spice.vv` file and establish a working session through Proxmox’s HTTP CONNECT spiceproxy, TLS with embedded CA + `host-subject` verification, and SPICE ticket authentication.
+- **Proxmox-first**: open a downloaded `pve-spice.vv` and establish a session through Proxmox’s HTTP CONNECT spiceproxy, TLS with embedded CA + `host-subject` verification, and SPICE ticket authentication.
 - **Single binary** for macOS, Linux, and Windows (`cmd/remote-viewer`).
 - **Library-first** (`pkg/spice`, `pkg/vvfile`) so CLI, GUI, and tooling share one session stack.
 - **Phase 1 pure Go only** (Apache-2.0); no spice-common C, FFmpeg, or libusb.
 
-See [docs/design-spice-viewer-go.md](docs/design-spice-viewer-go.md) for the full systems design.
+## Documentation
 
-## Module
+| Doc | Contents |
+|-----|----------|
+| [docs/proxmox.md](docs/proxmox.md) | Using Console `.vv`, CONNECT/TLS/ticket, troubleshooting, ticket-expiry messages, manual checklist |
+| [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md) | Automated vs manual gates, tag readiness for v0.1.0 |
+| [docs/design-spice-viewer-go.md](docs/design-spice-viewer-go.md) | Full systems design |
+| [scripts/milestone0_memo.md](scripts/milestone0_memo.md) | Ticket crypto, CONNECT authority, DN pin decisions |
 
-```text
-github.com/maskraven/virt-viewer
-```
+## Install / build
 
-## Building
-
-Requires Go 1.22+.
+Requires **Go 1.22+**.
 
 ```bash
+git clone https://github.com/maskraven/virt-viewer.git
+cd virt-viewer
 go build -o remote-viewer ./cmd/remote-viewer
 ./remote-viewer -h
+./remote-viewer -version
+```
+
+Optional release version stamp:
+
+```bash
+go build -ldflags "-X main.Version=v0.1.0" -o remote-viewer ./cmd/remote-viewer
+```
+
+Fyne pulls platform GUI dependencies on first build (OpenGL / OS window stack). Headless CI and dogfood use `--headless` and do not require a display for the NullDriver path.
+
+## Quick start
+
+### GUI (default)
+
+1. In Proxmox: VM → **Console** → **SPICE** (downloads a short-lived `.vv`).
+2. Open immediately:
+
+```bash
+./remote-viewer ~/Downloads/pve-spice.vv
+```
+
+Product semantics: if the file sets `delete-this-file=1`, it is removed **after parse, before dial**.
+
+### Headless
+
+```bash
+./remote-viewer --headless /path/to/pve-spice.vv
+```
+
+Connects with a null display/cursor driver, prints `connected`, and waits until disconnect or Ctrl+C. Useful for CI-style smoke tests against a lab endpoint.
+
+### Library sketch
+
+```go
+f, err := vvfile.ParseFile(path, vvfile.ParseOptions{DeleteIfRequested: true})
+// ...
+cfg, err := spice.ConnectConfigFromVV(f)
+client, err := spice.Connect(ctx, cfg)
+defer client.Close()
 ```
 
 ## Testing and checks
@@ -59,24 +119,30 @@ Record fixture hooks and secret-handling notes: [testdata/records/README.md](tes
 [scripts/README.md](scripts/README.md). Log redaction is unit-tested in
 `internal/security` (password must never appear in logs).
 
-## Layout (scaffold)
+### Proxmox acceptance
+
+Manual checklist (open `.vv`, frames, keyboard, mouse, ticket message, `delete-this-file`, HiDPI): [docs/proxmox.md](docs/proxmox.md#manual-acceptance-checklist-template).  
+Status: automated tests are the CI bar; **manual Proxmox lab remains pending operator sign-off**.
+
+## Layout
 
 | Path | Role |
 |------|------|
-| `cmd/remote-viewer` | Product binary (stub until protocol lands) |
-| `pkg/spice` | Public library root |
+| `cmd/remote-viewer` | Product binary (GUI default; `--headless`) |
+| `pkg/spice` | Public library root (Connect, events, drivers) |
 | `pkg/vvfile` | Public `.vv` parse API |
 | `internal/connector` | TCP / TLS / HTTP CONNECT dialer |
 | `internal/protocol` | Wire framing, link messages, enums |
 | `internal/session` | Session lifecycle, channel manager |
-| `internal/channel` | SPICE channels (main, display, inputs, …) |
-| `internal/codec` | Image/video codecs |
+| `internal/channel` | SPICE channels (main, display, inputs, cursor) |
+| `internal/codec` | Image codecs (raw, LZ) |
 | `internal/display` | Compositor / surfaces |
-| `internal/security` | Ticket crypto, zeroize helpers |
+| `internal/security` | Ticket crypto, zeroize, redaction |
 | `internal/ux` | Error classification (CLI + GUI) |
-| `internal/ui` | GUI backend (Fyne planned) |
+| `internal/ui` | Fyne GUI backend |
 | `testdata/` | Fixtures (`.vv`, certs, vectors, records) |
 | `scripts/` | CI and interop helpers |
+| `docs/` | Design, Proxmox guide, acceptance |
 | `third_party/` | Notes on external references |
 
 ## License
