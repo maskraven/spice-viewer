@@ -10,6 +10,11 @@ coverage.out
 coverage.html
 profile.cov
 
+# Local SPICE record captures (may contain secrets / guest pixels)
+testdata/records/*.rec
+testdata/records/*.spice
+testdata/records/*.bin
+
 # IDE / editor
 .idea/
 .vscode/
