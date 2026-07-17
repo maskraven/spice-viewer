@@ -65,6 +65,12 @@ func TestBindingsFromConfig_Defaults(t *testing.T) {
 	if b.ToggleFullscreen.String() != "Shift+F11" {
 		t.Errorf("TF = %q", b.ToggleFullscreen.String())
 	}
+	if b.ToggleChrome.String() != "Ctrl+Alt+M" {
+		t.Errorf("TC = %q", b.ToggleChrome.String())
+	}
+	if b.Match(ModCtrl|ModAlt, "m") != ActionToggleChrome {
+		t.Error("want toggle-chrome on Ctrl+Alt+M")
+	}
 }
 
 func TestBindingsFromConfig_Custom(t *testing.T) {

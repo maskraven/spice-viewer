@@ -17,6 +17,8 @@ const (
 	DefaultSecureAttention  = "Ctrl+Alt+Ins"
 	DefaultReleaseCursor    = "Ctrl+Alt+R"
 	DefaultToggleFullscreen = "Shift+F11"
+	// DefaultToggleChrome shows/hides the top-center control bar.
+	DefaultToggleChrome = "Ctrl+Alt+M"
 )
 
 // Modifier bits for a hotkey chord.
@@ -111,15 +113,17 @@ func ParseChord(s string) (Chord, error) {
 	return c, nil
 }
 
-// Bindings holds the three virt-viewer client hotkeys.
+// Bindings holds the virt-viewer client hotkeys (local; not sent to the guest).
 type Bindings struct {
 	SecureAttention  Chord
 	ReleaseCursor    Chord
 	ToggleFullscreen Chord
+	ToggleChrome     Chord
 }
 
 // BindingsFromConfig parses hotkeys from spice.HotkeyConfig, applying defaults
 // when a field is empty. Invalid non-empty chords return an error.
+// ToggleChrome always uses DefaultToggleChrome (not yet in connection files).
 func BindingsFromConfig(h spice.HotkeyConfig) (Bindings, error) {
 	sa := h.SecureAttention
 	if strings.TrimSpace(sa) == "" {
@@ -145,6 +149,9 @@ func BindingsFromConfig(h spice.HotkeyConfig) (Bindings, error) {
 	if b.ToggleFullscreen, err = ParseChord(tf); err != nil {
 		return Bindings{}, err
 	}
+	if b.ToggleChrome, err = ParseChord(DefaultToggleChrome); err != nil {
+		return Bindings{}, err
+	}
 	return b, nil
 }
 
@@ -156,10 +163,11 @@ const (
 	ActionSecureAttention
 	ActionReleaseCursor
 	ActionToggleFullscreen
+	ActionToggleChrome
 )
 
 // Match returns the action for the given modifier mask and key name.
-// SecureAttention is checked first, then ReleaseCursor, then ToggleFullscreen.
+// Order: SecureAttention, ReleaseCursor, ToggleFullscreen, ToggleChrome.
 func (b Bindings) Match(mods uint8, key string) Action {
 	key = normalizeKeyName(key)
 	if b.SecureAttention.Matches(mods, key) {
@@ -170,6 +178,9 @@ func (b Bindings) Match(mods uint8, key string) Action {
 	}
 	if b.ToggleFullscreen.Matches(mods, key) {
 		return ActionToggleFullscreen
+	}
+	if b.ToggleChrome.Matches(mods, key) {
+		return ActionToggleChrome
 	}
 	return ActionNone
 }

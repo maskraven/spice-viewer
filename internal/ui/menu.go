@@ -8,13 +8,12 @@ import (
 	"log"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
-// installMenus builds the main menu bar and a compact toolbar for daily use.
+// installMenus builds the main menu bar. Daily controls live in the floating
+// top-center chrome (installChrome); there is no always-on toolbar.
 func (ui *sessionUI) installMenus() {
 	// --- File ---
 	fileMenu := fyne.NewMenu("File",
@@ -37,6 +36,25 @@ func (ui *sessionUI) installMenus() {
 			ui.enterGrab()
 			ui.refreshStatus()
 		}),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Show control bar", func() {
+			ui.revealChrome()
+			if ui.chrome != nil && !ui.chrome.isPinned() {
+				ui.scheduleChromeHide()
+			}
+		}),
+		fyne.NewMenuItem("Pin control bar", func() {
+			if ui.chrome != nil && !ui.chrome.isPinned() {
+				ui.toggleChromePin()
+			} else {
+				ui.revealChrome()
+			}
+		}),
+		fyne.NewMenuItem("Unpin control bar", func() {
+			if ui.chrome != nil && ui.chrome.isPinned() {
+				ui.toggleChromePin()
+			}
+		}),
 	)
 
 	// --- Send Keys (virt-viewer style) ---
@@ -56,43 +74,28 @@ func (ui *sessionUI) installMenus() {
 	// --- Help ---
 	helpMenu := fyne.NewMenu("Help",
 		fyne.NewMenuItem("Keyboard shortcuts", func() {
-			dialog.ShowInformation("Keyboard shortcuts", FormatSendKeyHelp(ui.bind), ui.win)
+			ui.showKeyboardShortcuts()
 		}),
 		fyne.NewMenuItem("About remote-viewer", func() {
-			dialog.ShowInformation("About",
-				"remote-viewer — SPICE client (Proxmox-friendly)\n"+
-					"Library: github.com/maskraven/virt-viewer\n"+
-					"Display, inputs, cursor, audio, Send Keys, hotkeys.\n"+
-					"Clipboard: toolbar Copy/Paste via spice-vdagent; Type text fallback.",
-				ui.win)
+			ui.showAbout()
 		}),
 	)
 
 	ui.win.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, sendMenu, helpMenu))
+}
 
-	// Toolbar: daily actions always visible (clipboard lives here, not an Edit menu).
-	ui.toolbar = container.NewHBox(
-		widget.NewButtonWithIcon("Ctrl+Alt+Del", theme.ConfirmIcon(), func() {
-			ui.sendKeys(SendKeyPreset{Label: "Ctrl+Alt+Del", Keys: CADScancodes()})
-		}),
-		widget.NewButtonWithIcon("Ungrab", theme.CancelIcon(), func() {
-			ui.releaseGrab()
-			ui.refreshStatus()
-		}),
-		widget.NewButtonWithIcon("Fullscreen", theme.ViewFullScreenIcon(), func() {
-			ui.toggleFullscreen()
-			ui.refreshStatus()
-		}),
-		widget.NewButtonWithIcon("Copy", theme.ContentCopyIcon(), func() {
-			ui.copyFromGuest()
-		}),
-		widget.NewButtonWithIcon("Paste", theme.ContentPasteIcon(), func() {
-			ui.pasteToGuest()
-		}),
-		widget.NewButtonWithIcon("Type…", theme.DocumentCreateIcon(), func() {
-			ui.showTypeTextDialog()
-		}),
-	)
+func (ui *sessionUI) showKeyboardShortcuts() {
+	dialog.ShowInformation("Keyboard shortcuts", FormatSendKeyHelp(ui.bind), ui.win)
+}
+
+func (ui *sessionUI) showAbout() {
+	dialog.ShowInformation("About",
+		"remote-viewer — SPICE client (Proxmox-friendly)\n"+
+			"Library: github.com/maskraven/virt-viewer\n"+
+			"Display, inputs, cursor, audio, Send Keys, hotkeys.\n"+
+			"Controls: top-center auto-hide bar (Pin · CAD · Ungrab · clipboard).\n"+
+			"Clipboard: Copy/Paste via spice-vdagent; Type text fallback.",
+		ui.win)
 }
 
 func (ui *sessionUI) hostClipboard() fyne.Clipboard {

@@ -205,6 +205,9 @@ func FormatSendKeyHelp(bind Bindings) string {
 	b.WriteString(fmt.Sprintf("  Secure attention (CAD):  %s\n", chordLabel(bind.SecureAttention)))
 	b.WriteString(fmt.Sprintf("  Release cursor:          %s\n", chordLabel(bind.ReleaseCursor)))
 	b.WriteString(fmt.Sprintf("  Toggle fullscreen:       %s\n", chordLabel(bind.ToggleFullscreen)))
+	b.WriteString(fmt.Sprintf("  Toggle control bar:      %s\n", chordLabel(bind.ToggleChrome)))
+	b.WriteString("\nControl bar: move the pointer to the top edge of the display\n")
+	b.WriteString("to reveal the floating toolbar; Pin keeps it visible.\n")
 	b.WriteString("\nTip: use Send Keys → Ctrl+Alt+Del for Windows login screens.")
 	return b.String()
 }

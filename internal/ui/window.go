@@ -28,10 +28,12 @@ type sessionUI struct {
 	grab    Grab
 	bind    Bindings
 
-	client  *spice.Client
-	inputs  *spice.Inputs
-	toolbar *fyne.Container
-	status  *widget.Label
+	client *spice.Client
+	inputs *spice.Inputs
+	chrome *controlChrome
+	status *widget.Label
+	// statusStrip is the bottom compact bar; hidden in fullscreen.
+	statusStrip *statusBar
 
 	mu     sync.Mutex
 	mods   uint8 // currently pressed modifiers (host)
@@ -59,18 +61,27 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 	pad := newMousePad(ui, view)
 	ui.pad = pad
 	ui.installMenus()
+	chromeOverlay := ui.installChrome()
 
-	// Layout: toolbar | guest display | compact single-line status strip
-	content := container.NewBorder(ui.toolbar, newStatusBar(ui.status), nil, nil, pad)
+	// Guest fills the area; chrome overlays (does not shrink the display).
+	// Bottom: compact single-line status strip.
+	stage := container.NewStack(pad, chromeOverlay)
+	ui.statusStrip = newStatusBar(ui.status)
+	content := container.NewBorder(nil, ui.statusStrip, nil, nil, stage)
 	win.SetContent(content)
 	win.Resize(fyne.NewSize(1024, 768))
 	win.SetMaster()
 
 	if startFullscreen {
 		win.SetFullScreen(true)
+		if ui.statusStrip != nil {
+			ui.statusStrip.Hide()
+		}
 	}
 	ui.wireKeys()
 	ui.refreshStatus()
+	// Default unpinned: brief peek then auto-hide.
+	ui.peekChrome()
 	return ui
 }
 
@@ -196,6 +207,9 @@ func (ui *sessionUI) onKeyDown(ev *fyne.KeyEvent) {
 		case ActionToggleFullscreen:
 			ui.toggleFullscreen()
 			return
+		case ActionToggleChrome:
+			ui.toggleChromeVisible()
+			return
 		}
 	}
 
@@ -261,6 +275,14 @@ func (ui *sessionUI) toggleFullscreen() {
 	fs := ui.fs
 	ui.mu.Unlock()
 	ui.win.SetFullScreen(fs)
+	// Keep chrome pin across fullscreen; hide bottom status in FS for max area.
+	if ui.statusStrip != nil {
+		if fs {
+			ui.statusStrip.Hide()
+		} else {
+			ui.statusStrip.Show()
+		}
+	}
 	ui.refreshStatus()
 }
 
@@ -353,6 +375,10 @@ func (p *mousePad) Cursor() desktop.Cursor {
 }
 
 func (p *mousePad) MouseDown(ev *desktop.MouseEvent) {
+	if ev != nil && p.ui.chromeBlocksClick(ev.Position) {
+		// Host chrome hit zone / bar — do not grab or forward to guest.
+		return
+	}
 	if !p.ui.grab.Active() {
 		p.ui.enterGrab()
 		// Seed position on grab so the next move has a relative baseline.
@@ -379,6 +405,9 @@ func (p *mousePad) MouseDown(ev *desktop.MouseEvent) {
 }
 
 func (p *mousePad) MouseUp(ev *desktop.MouseEvent) {
+	if ev != nil && p.ui.chromeBlocksClick(ev.Position) {
+		return
+	}
 	if !p.ui.grab.Active() || p.ui.inputs == nil || ev == nil {
 		return
 	}
@@ -391,7 +420,17 @@ func (p *mousePad) MouseUp(ev *desktop.MouseEvent) {
 }
 
 func (p *mousePad) MouseMoved(ev *desktop.MouseEvent) {
-	if !p.ui.grab.Active() || p.ui.inputs == nil || ev == nil {
+	if ev == nil {
+		return
+	}
+	// Chrome hit-zone reveal / auto-hide before any guest forward.
+	// Works while grab is active (host chrome still reachable at top edge).
+	if p.ui.handleChromePointer(ev.Position) {
+		// Reset relative baseline so re-entering the guest does not jump.
+		p.hasLastAbs = false
+		return
+	}
+	if !p.ui.grab.Active() || p.ui.inputs == nil {
 		return
 	}
 	if p.ui.inputs.ClientMouse() {
@@ -464,6 +503,8 @@ func (p *mousePad) sendMousePosition(ev *desktop.MouseEvent) {
 func (p *mousePad) MouseIn(*desktop.MouseEvent) {}
 func (p *mousePad) MouseOut() {
 	p.hasLastAbs = false
+	// Leaving the pad (e.g. toward OS chrome) schedules hide unless pinned.
+	p.ui.scheduleChromeHide()
 }
 
 func (p *mousePad) Scrolled(ev *fyne.ScrollEvent) {
