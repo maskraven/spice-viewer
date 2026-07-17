@@ -1,0 +1,52 @@
+{
+  "description": "AuthSpice RSAES-OAEP SHA-1 golden vectors for github.com/maskraven/spice-viewer",
+  "algorithm": "RSAES-OAEP",
+  "hash": "SHA-1",
+  "mgf1_hash": "SHA-1",
+  "label": "",
+  "key_bits": 1024,
+  "public_exponent": 65537,
+  "spki_der_len": 162,
+  "ciphertext_len": 128,
+  "spki_der_hex": "30819f300d06092a864886f70d010101050003818d0030818902818100af8a6abae05d9f006374bbc7bdfec4896179172262fb1495ebe17e3b70992d418a82e3cdedbaac1f1a56b511ddc2b97b7bd9008d8f5c6cf39507cf11050736710396baa7a084ef83d2ddd5db03e68e521829391b57782f9ae9edd477768ecc0b896b31c34081ee7c8837346b35802ceef6514996f0f1fa89dda512344a9733b70203010001",
+  "oaep_seed_hex": "0102030405060708090a0b0c0d0e0f1011121314",
+  "notes": [
+    "spice-protocol SPICE_TICKET_PUBKEY_BYTES = 162",
+    "spice-protocol SPICE_MAX_PASSWORD_LENGTH = 60 (client/server API limit)",
+    "OAEP-SHA1 max plaintext for 1024-bit = 86 bytes including NUL → password ≤ 85",
+    "spice-gtk encrypts with strlen(password)+1 (includes NUL)",
+    "OpenSSL RSA_PKCS1_OAEP_PADDING defaults to SHA-1 for hash and MGF1"
+  ],
+  "vectors": [
+    {
+      "name": "testpass",
+      "password_utf8": "testpass",
+      "password_hex": "7465737470617373",
+      "plaintext_hex": "746573747061737300",
+      "ciphertext_hex": "2cdcbd90493be604da62412b29392ec0702968a5c506249297a752956806112009660eabea45b6a7bc262ed01bb7532eb0b888f4fc0633f7b0a9a925e82b9950ffbc5b4f9f1c99c237b5bf4da3e931503cf2b2605f0d7dbf92ca0deaf9a8f7f491bfabedffbf064cddb15260100c5c783e246b2d8b1bfd0bbc1800fa528910a3"
+    },
+    {
+      "name": "empty_password",
+      "password_utf8": "",
+      "password_hex": "",
+      "plaintext_hex": "00",
+      "ciphertext_hex": "8e548669548f479c88245ab3eca848530e0359ea0722bb59939b482ed7627a4d6517022809eadef039775955048cdff27265960f8872de75ae0b46f12a2d2b596d04fe0f78578db0460b616f6f164c8d61f38261a3ab618bcb1dc9293d0cee4a841dea4d4373b2ed04bd6d91673241de598e33560a591a88c6c7ed2ff67e4fd0"
+    },
+    {
+      "name": "max_spice_protocol_60",
+      "password_utf8": "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGH",
+      "password_hex": "4142434445464748494a4b4c4d4e4f505152535455565758595a4142434445464748494a4b4c4d4e4f505152535455565758595a4142434445464748",
+      "plaintext_hex": "4142434445464748494a4b4c4d4e4f505152535455565758595a4142434445464748494a4b4c4d4e4f505152535455565758595a414243444546474800",
+      "ciphertext_hex": "29dea74343dac8a9d22c544b4d90c389b27e690cb741ddf864a90e7a4c790c21274117ffe3cc92dc15191885f340d25813222e621816c1bc199736a44fb53e4d31d1b9651e2f4297a709d9b474d1a1080c7e3888993f36ee0e7aa09c9149ff7b3d925ad06d06eb4b305e9766ce695f371ed998f7f95c8c11cf7dfbb90fca5e0c",
+      "comment": "SPICE_MAX_PASSWORD_LENGTH=60 from spice/protocol.h"
+    },
+    {
+      "name": "max_oaep_budget_85",
+      "password_utf8": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefg",
+      "password_hex": "6162636465666768696a6b6c6d6e6f707172737475767778797a6162636465666768696a6b6c6d6e6f707172737475767778797a6162636465666768696a6b6c6d6e6f707172737475767778797a61626364656667",
+      "plaintext_hex": "6162636465666768696a6b6c6d6e6f707172737475767778797a6162636465666768696a6b6c6d6e6f707172737475767778797a6162636465666768696a6b6c6d6e6f707172737475767778797a6162636465666700",
+      "ciphertext_hex": "692fd84db026f454d617c68112c31f88413d3bae47cdd58fd5bff3d3673b15212c8648b02aba39662267ac8cacd2992ed52792c1b0f1fffe6d69fbb2acb2c92f490beaa0645ee1baf64ff4dae106d6af2f14b7dc0053599a3f81e9a05eb65d7c240fb91dccf810ba062b66bb118632ff96a4bd473c87f93dd7a52032bfd0c6bd",
+      "comment": "crypto budget 85+NUL; exceeds spice-protocol 60 but valid OAEP"
+    }
+  ]
+}

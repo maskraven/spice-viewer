@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=SPICE Viewer
+GenericName=SPICE Remote Viewer
+Comment=Open Proxmox / virt-viewer SPICE connection files (.vv)
+# %u: path or file:// URL (GNOME/KDE may pass either for application/x-virt-viewer)
+Exec=spice-viewer %u
+TryExec=spice-viewer
+Icon=spice-viewer
+Terminal=false
+Categories=Network;RemoteAccess;System;
+MimeType=application/x-virt-viewer;
+Keywords=SPICE;Proxmox;VDI;remote;virt-viewer;console;
+StartupNotify=true

@@ -1,0 +1,125 @@
+# Goreleaser OSS — Linux product packages (native CGO only).
+#
+# CI runs with --single-target on each arch runner:
+#   ubuntu-latest     → linux/amd64
+#   ubuntu-24.04-arm  → linux/arm64
+# Do not cross-compile Fyne/CGO between arches.
+#
+# macOS .app/.dmg  → scripts/macos/build-product.sh  (universal lipo)
+# Windows exe/zip  → scripts/windows/build-product.ps1 (windows-latest amd64)
+# See packaging/README.md and .github/workflows/release.yml
+version: 2
+
+project_name: spice-viewer
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: spice-viewer-linux
+    main: ./cmd/spice-viewer
+    binary: spice-viewer
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # With --single-target, only the host arch is built.
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+
+archives:
+  - id: default
+    ids:
+      - spice-viewer-linux
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - packaging/**/*
+
+nfpms:
+  - id: spice-viewer
+    package_name: spice-viewer
+    ids:
+      - spice-viewer-linux
+    homepage: https://github.com/maskraven/spice-viewer
+    maintainer: maskraven
+    description: |-
+      SPICE remote display client with Proxmox Console (.vv) support.
+      Optional system FFmpeg for H.264 on Linux (never bundled).
+    license: Apache-2.0
+    section: net
+    priority: optional
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: packaging/spice-viewer.desktop
+        dst: /usr/share/applications/spice-viewer.desktop
+        file_info:
+          mode: 0644
+      - src: packaging/spice-viewer.xml
+        dst: /usr/share/mime/packages/spice-viewer.xml
+        file_info:
+          mode: 0644
+      - src: packaging/icons/hicolor
+        dst: /usr/share/icons/hicolor
+        type: tree
+      - src: packaging/README.md
+        dst: /usr/share/doc/spice-viewer/README.md
+        file_info:
+          mode: 0644
+      - src: LICENSE
+        dst: /usr/share/doc/spice-viewer/copyright
+        file_info:
+          mode: 0644
+    scripts:
+      postinstall: packaging/scripts/postinstall.sh
+      postremove: packaging/scripts/postremove.sh
+    dependencies:
+      - libgl1
+      - libx11-6
+      - libxcursor1
+      - libxrandr2
+      - libxinerama1
+      - libxi6
+      - libxkbcommon0
+      - libwayland-client0
+    recommends:
+      - ffmpeg
+    # Binary is spice-viewer — no path clash with distro virt-viewer/remote-viewer.
+    overrides:
+      rpm:
+        dependencies:
+          - libGL
+          - libX11
+          - libXcursor
+          - libXrandr
+          - libXinerama
+          - libXi
+          - libxkbcommon
+          - libwayland-client
+        recommends:
+          - ffmpeg
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: true
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"

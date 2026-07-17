@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "execute-plan/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test / vet / fmt / imports
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22.x"
+
+      # Fyne/GLFW cgo needs X11/OpenGL headers on Linux (go vet/test compile packages).
+      - name: Install Fyne / OpenGL build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc pkg-config \
+            libgl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev \
+            libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "gofmt needed on:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        env:
+          CGO_ENABLED: "1"
+        run: go vet ./...
+
+      - name: go test
+        # Default unit suite only. Live QEMU interop uses //go:build integration
+        # and is run locally via ./scripts/run_integration.sh (see scripts/README.md).
+        # Do not add -tags=integration here: runners have no SPICE lab.
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./...
+
+      - name: import boundary check
+        run: ./scripts/check_imports.sh
+
+  # Optional documentation of the integration path (not executed on every PR).
+  # To run the same commands on a self-hosted runner with QEMU+SPICE:
+  #   ./scripts/interop_qemu.sh &
+  #   ./scripts/run_integration.sh
+  # Packages: internal/session (TestQEMU_*), build tag: integration.
+  integration-docs:
+    name: Integration job docs (no-op)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Document //go:build integration
+        run: |
+          cat <<'EOF'
+          Integration tests use //go:build integration and are excluded from
+          default "go test ./...".
+
+          How to run (local or self-hosted lab):
+            1. ./scripts/interop_qemu.sh --check   # require QEMU+SPICE
+            2. ./scripts/interop_qemu.sh           # lab on 127.0.0.1:5900
+            3. ./scripts/run_integration.sh        # go test -tags=integration
+
+          Env: SPICE_HOST, SPICE_PORT, SPICE_PASSWORD (defaults match interop_qemu.sh).
+          Records: SPICE_RECORD=… or --record FILE (testdata/records/README.md).
+          Redaction: go test ./internal/security/ -run Redact
+          EOF

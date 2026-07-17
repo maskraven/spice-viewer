@@ -1,0 +1,32 @@
+# Built binaries (README: go build -o spice-viewer ./cmd/spice-viewer)
+/spice-viewer
+/spice-viewer.exe
+*.exe
+
+# Go test / coverage artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+profile.cov
+
+# Local SPICE record captures (may contain secrets / guest pixels)
+testdata/records/*.rec
+testdata/records/*.spice
+testdata/records/*.bin
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Generated Windows resources (go-winres)
+cmd/spice-viewer/rsrc_windows_*.syso
+
+# Local package output
+/dist/
+
+# Local design / planning notes (not shipped)
+/docs/

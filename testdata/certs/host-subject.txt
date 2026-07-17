@@ -1,0 +1,1 @@
+OU=PVE Cluster Node,O=Proxmox Virtual Environment,CN=pve.example.com
