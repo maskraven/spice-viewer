@@ -32,12 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GLZ** (pure Go): `codec.GLZWindow` dictionary decoder for `GLZ_RGB` / `ZLIB_GLZ_RGB`;
   display `resolveImage` path; soft-skip on decode error (no black fill). No cgo/spice-common.
 
+#### Documentation
+
+- Phase 3 landing status: [docs/phase3.md](docs/phase3.md) acceptance (automated vs manual),
+  [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md#phase-3-acceptance-parity-stretch),
+  [docs/phase2.md](docs/phase2.md) “landed vs still open”, README H.264 backend policy
+
 #### Planned (Phase 3+)
 
 - Real mic capture (`RecordDriver` host backend) and USB host stack (libusb/platform)
 - Full WebDAV/phodav share UX beyond message-loop scaffold
 - Linux host audio (ALSA/Pulse) beyond the current stub
-- Live Proxmox operator sign-off updates in `docs/acceptance-v0.1.md`
+- Live Proxmox operator sign-off (still pending; not claimed done)
 
 ### Phase 2 — Desktop comfort
 

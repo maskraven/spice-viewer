@@ -4,24 +4,28 @@ A greenfield, library-first [SPICE](https://www.spice-space.org/) remote display
 
 **Module:** `github.com/maskraven/virt-viewer` · **License:** [Apache-2.0](LICENSE) · **CLI:** `remote-viewer`
 
-## Status — Phase 2 (desktop comfort) on top of v0.1
+## Status — Phase 2 + Phase 3 stretch on top of v0.1
 
-**v0.1** Proxmox MVP is complete. **Phase 2** adds guest agent clipboard, richer codecs, audio playback, and packaging.
+**v0.1** Proxmox MVP is complete. **Phase 2** adds guest agent clipboard, richer codecs, audio playback hooks, and packaging. **Phase 3** (in progress) adds GLZ, H.264, host audio on macOS/Windows, and best-effort channel scaffolds — see [docs/phase3.md](docs/phase3.md).
 
 | Area | State |
 |------|--------|
 | Parse Proxmox / virt-viewer `.vv` | Implemented (`pkg/vvfile`) |
 | HTTP CONNECT spiceproxy + TLS CA + `host-subject` pin | Implemented (`internal/connector`) |
 | AuthSpice ticket, multi-channel session | Implemented (`pkg/spice`, session/channel) |
-| Display raw + LZ + **Quic + JPEG + MJPEG streams** | Implemented (`internal/codec`) |
-| Inputs, cursor, **playback (best-effort)** | Implemented (GUI host sink on macOS/Windows via `internal/audio`; headless NullPlayback) |
+| Display raw + LZ + **Quic + JPEG + MJPEG** + **GLZ** | Implemented (`internal/codec`) |
+| **H.264 streams** | OS decoder on **Windows/macOS**; **user-provided FFmpeg** on Linux (never bundled) — [phase3.md](docs/phase3.md#h264-decision) |
+| Inputs, cursor, **playback (best-effort)** | Implemented (GUI host sink on macOS/Windows via `internal/audio`; Linux audio stub; headless NullPlayback) |
 | **vdagent**: clipboard text + monitors config | Implemented (`internal/agent`) — needs `spice-vdagent` in guest |
+| Record / USB redir / WebDAV | **Scaffolds only** (best-effort open; no full USB host / real mic) |
 | GUI: Send Keys, Edit copy/paste, grab, hotkeys | Implemented (Fyne) |
 | Headless (`--headless`) | Implemented |
 | Packaging (`.desktop`, MIME, goreleaser) | Scaffold under `packaging/` + `.goreleaser.yaml` |
 | Live Proxmox lab acceptance | **Pending operator sign-off** (not in CI) |
 
 There is **no** auto-reconnect for short-lived tickets: after expiry or disconnect, open Console again in Proxmox for a new `.vv`.
+
+**H.264 policy:** macOS uses VideoToolbox and Windows uses Media Foundation (system APIs). Linux expects a distro **FFmpeg** with H.264 decode on `PATH` — we do **not** ship FFmpeg in the default binary. Without it, H.264 streams soft-skip and other codecs still work. Details: [docs/phase3.md](docs/phase3.md).
 
 Changelog: [CHANGELOG.md](CHANGELOG.md).
 
@@ -37,9 +41,9 @@ Changelog: [CHANGELOG.md](CHANGELOG.md).
 | Doc | Contents |
 |-----|----------|
 | [docs/proxmox.md](docs/proxmox.md) | Using Console `.vv`, CONNECT/TLS/ticket, troubleshooting, ticket-expiry messages, manual checklist |
-| [docs/phase2.md](docs/phase2.md) | Clipboard/agent, codecs, audio, packaging APIs |
-| [docs/phase3.md](docs/phase3.md) | GLZ/H.264/USB/WebDAV; H.264 backends; **Linux FFmpeg install**; host audio |
-| [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md) | Automated vs manual gates, tag readiness for v0.1.0 |
+| [docs/phase2.md](docs/phase2.md) | Clipboard/agent, codecs, audio, packaging APIs; Phase 3 landed vs open |
+| [docs/phase3.md](docs/phase3.md) | GLZ, H.264 (OS on Win/Mac, FFmpeg on Linux), host audio, channel scaffolds, acceptance |
+| [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md) | Automated vs manual gates (Phase 1 + Phase 3 stretch), tag readiness for v0.1.0 |
 | [docs/design-spice-viewer-go.md](docs/design-spice-viewer-go.md) | Full systems design |
 | [scripts/milestone0_memo.md](scripts/milestone0_memo.md) | Ticket crypto, CONNECT authority, DN pin decisions |
 
@@ -154,7 +158,8 @@ Status: automated tests are the CI bar; **manual Proxmox lab remains pending ope
 | `internal/protocol` | Wire framing, link messages, enums |
 | `internal/session` | Session lifecycle, channel manager |
 | `internal/channel` | SPICE channels (main, display, inputs, cursor) |
-| `internal/codec` | Image codecs (raw, LZ) |
+| `internal/codec` | Image codecs (raw, LZ, Quic, JPEG, GLZ) + `h264` |
+| `internal/audio` | Host playback sink (macOS/Windows; Linux stub) |
 | `internal/display` | Compositor / surfaces |
 | `internal/security` | Ticket crypto, zeroize, redaction |
 | `internal/ux` | Error classification (CLI + GUI) |

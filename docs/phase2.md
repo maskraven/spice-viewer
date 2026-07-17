@@ -64,8 +64,23 @@ goreleaser release --snapshot --clean
 
 See `packaging/README.md` for manual MIME/desktop install on Linux.
 
-## Still Phase 3
+## Phase 3 (landed vs still open)
 
-- GLZ / H.264 (license-aware)
-- USB redirection, WebDAV, record (mic)
-- Bundled host audio device backends
+See [phase3.md](phase3.md) for full policy and package layout.
+
+**Landed (best-effort / scaffold as noted)**
+
+| Area | State |
+|------|--------|
+| **GLZ** | Pure Go dictionary decode (`GLZ_RGB` / `ZLIB_GLZ_RGB`); soft-skip on error |
+| **H.264 streams** | macOS VideoToolbox; Windows Media Foundation; Linux **user-provided FFmpeg** (not bundled) |
+| **Host audio sink** | GUI playback on **macOS/Windows** via `internal/audio` (oto); headless stays NullPlayback |
+| **Record / USB / WebDAV** | Channel **scaffolds** only — best-effort open, never session-fatal; NullRecord (no mic PCM); no libusb; partial WebDAV share UX |
+
+**Still open (not claimed done)**
+
+- Real mic capture (`RecordDriver` host backend)
+- Full USB host stack (libusb / platform)
+- Linux host audio (ALSA/Pulse) beyond the current stub
+- Full WebDAV/phodav share UX
+- Live Proxmox operator sign-off ([acceptance-v0.1.md](acceptance-v0.1.md))

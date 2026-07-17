@@ -97,6 +97,32 @@ No git tag is created by this documentation PR. When cutting **v0.1.0**:
    - `go test ./...` fails  
    - Docs claim Proxmox lab sign-off without an operator entry  
 
+## Phase 3 acceptance (parity stretch)
+
+Phase 3 builds on v0.1/Phase 2 toward spice-gtk parity **without** claiming full USB host, real mic capture, Linux host audio, or live Proxmox sign-off. Design and install notes: [phase3.md](phase3.md).
+
+### Automated vs manual
+
+| Area | Automated (CI / unit) | Manual / operator |
+|------|----------------------|-------------------|
+| **H.264 macOS** (VideoToolbox) | Package builds / soft-skip surface | Guest H.264 stream presents frames (no FFmpeg) |
+| **H.264 Windows** (Media Foundation) | cgo path + `CGO_ENABLED=0` soft-skip | Product cgo build: MFT → RGBA on H.264 stream |
+| **H.264 Linux** (user FFmpeg) | Available only when probe finds h264; soft-skip otherwise | Install distro FFmpeg → decode works; without FFmpeg session continues |
+| **GLZ** | Pure-Go decode unit tests | Guest GLZ images present; errors soft-skip |
+| **Record / USB / WebDAV** | Scaffold open + never session-fatal | Best-effort open when listed — **not** full host USB, real mic PCM, or complete share UX |
+| **Host audio** | `internal/audio` unit tests; headless NullPlayback | GUI playback on **macOS/Windows** with guest RAW PCM; **Linux** still stub (silent) |
+| **Live Proxmox** | Not in CI | **Still operator-owned** (tables above + [proxmox.md](proxmox.md)) |
+
+### Explicitly not done
+
+- Full USB host stack (libusb / platform redir)
+- Real microphone capture (`RecordDriver` host backend)
+- Linux host audio beyond the ALSA/Pulse stub
+- Full WebDAV/phodav folder-share parity
+- Operator-signed Proxmox lab rows in this document
+
+Default gates remain: `go test ./...`, `go vet`, `gofmt`, `./scripts/check_imports.sh`. Platform H.264 and host audio need real OS APIs or FFmpeg on `PATH` and are not fully exercised in GitHub Actions.
+
 ## Related paths
 
 | Path | Role |
@@ -108,3 +134,4 @@ No git tag is created by this documentation PR. When cutting **v0.1.0**:
 | `internal/ux` | Stable error classes / messages |
 | `testdata/vv/proxmox_sample.vv` | Sanitized Proxmox-shaped fixture |
 | `scripts/milestone0_memo.md` | Crypto / CONNECT / DN decisions |
+| `docs/phase3.md` | Phase 3 backends, FFmpeg install, channel scaffolds |

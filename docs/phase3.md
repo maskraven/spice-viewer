@@ -244,21 +244,40 @@ internal/audio/
 - Full USB host stack parity with spice-gtk
 - Multi-monitor agent stretch goals beyond Phase 2 monitors-config
 
-## Acceptance (measurable)
+## Acceptance (Phase 3 stretch)
 
-1. On macOS (VideoToolbox) or Windows (Media Foundation MFT → RGBA) with H.264 guest stream: frames present without FFmpeg.
+Honest split: **automated** gates run in CI / unit tests; **platform and Proxmox** checks are operator-owned. Do **not** treat full USB host, real mic capture, Linux host audio, or live Proxmox sign-off as done.
+
+### Automated (CI / unit)
+
+| Check | How | Status |
+|-------|-----|--------|
+| Unit + package tests | `go test ./...` | Required (same bar as Phase 1/2) |
+| `go vet` / format / import boundaries | CI scripts | Required |
+| GLZ decode | `internal/codec` unit tests (dictionary / soft-skip path) | Covered by package tests |
+| H.264 package surface | `internal/codec/h264` (`Available`, soft-skip stubs, platform files) | Unit/build surface; full pixel path needs host OS or FFmpeg |
+| Record / USB / WebDAV scaffolds | channel + protocol tests; open failures never session-fatal | Scaffold behavior covered |
+| Host audio package | `internal/audio` start/stop/write without hardware | Unit tests; `-tags=noaudio` stub path |
+| Docs list backends and gaps | this file + [CHANGELOG.md](../CHANGELOG.md) | Maintained with landings |
+
+### Manual / operator (not claimed signed-off)
+
+| Check | Notes |
+|-------|--------|
+| **H.264 macOS** | VideoToolbox path: guest H.264 stream presents frames (no FFmpeg) |
+| **H.264 Windows** | Media Foundation MFT → NV12→RGBA with cgo product build (`CGO_ENABLED=0` soft-skips decode) |
+| **H.264 Linux** | Distro FFmpeg on `PATH` with h264 decode → streams work; **without** FFmpeg → soft-skip, session + other codecs continue |
+| **GLZ** | Guest images using `GLZ_RGB` / `ZLIB_GLZ_RGB` present; decode errors soft-skip (no black fill) |
+| **Record / USB / WebDAV open** | When channels are listed, best-effort open; session survives absence or open failure. **Not** full USB host, real mic PCM, or complete WebDAV share |
+| **Host audio macOS/Windows** | GUI plays guest RAW S16LE PCM; `--headless` stays silent (`NullPlayback`) |
+| **Linux host audio** | Still stub — silence until ALSA/Pulse lands |
+| **Live Proxmox** | Still operator-owned — see [acceptance-v0.1.md](acceptance-v0.1.md) and [proxmox.md](proxmox.md) |
+
+### Measurable criteria (summary)
+
+1. On macOS (VideoToolbox) or Windows (Media Foundation MFT → RGBA) with an H.264 guest stream: frames present without FFmpeg.
 2. Linux without FFmpeg: soft-skip H.264; session + other codecs still work.
-3. Linux with distro FFmpeg installed and discoverable: H.264 streams decode (when backend lands).
+3. Linux with distro FFmpeg installed and discoverable: H.264 streams decode via the CLI backend.
 4. Record/USB/WebDAV open as best-effort when listed; session survives absence.
-5. `docs/phase3.md` + CHANGELOG list platform backends and gaps vs spice-gtk.
+5. GUI on macOS/Windows: host audio plays when the guest sends RAW PCM; headless stays silent.
 6. Manual Proxmox checklist remains operator-owned for live sign-off.
-7. GUI on macOS/Windows: host audio plays when the guest sends RAW PCM; headless stays silent.
-
-## PR-style work units
-
-1. **proto+docs** — constants, phase3 guide, H.264 decision
-2. **h264** — OS decoder + display stream wire-up
-3. **glz** — pure Go decoder + image path
-4. **channels** — record / usbredir / webdav + session open
-5. **audio** — host playback sink package
-6. **acceptance** — README/CHANGELOG/checklist updates
