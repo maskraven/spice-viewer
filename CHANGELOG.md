@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Planned (Phase 3+)
 
-- GLZ / H.264 (license-aware)
+- GLZ (pure Go); H.264 via **OS decoders** (macOS VideoToolbox, Windows Media Foundation)
+- **Linux H.264**: user-provided **FFmpeg** (not bundled) — install guide in [docs/phase3.md](docs/phase3.md#linux-install-ffmpeg)
 - USB redirection, WebDAV, record channel
 - Host audio sink beyond NullPlayback (platform packages)
 - Live Proxmox operator sign-off updates in `docs/acceptance-v0.1.md`

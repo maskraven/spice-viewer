@@ -38,6 +38,7 @@ Changelog: [CHANGELOG.md](CHANGELOG.md).
 |-----|----------|
 | [docs/proxmox.md](docs/proxmox.md) | Using Console `.vv`, CONNECT/TLS/ticket, troubleshooting, ticket-expiry messages, manual checklist |
 | [docs/phase2.md](docs/phase2.md) | Clipboard/agent, codecs, audio, packaging APIs |
+| [docs/phase3.md](docs/phase3.md) | GLZ/H.264/USB/WebDAV; H.264 backends; **Linux FFmpeg install** |
 | [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md) | Automated vs manual gates, tag readiness for v0.1.0 |
 | [docs/design-spice-viewer-go.md](docs/design-spice-viewer-go.md) | Full systems design |
 | [scripts/milestone0_memo.md](scripts/milestone0_memo.md) | Ticket crypto, CONNECT authority, DN pin decisions |
