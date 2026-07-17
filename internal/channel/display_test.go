@@ -4,8 +4,10 @@
 package channel_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"image"
+	"image/jpeg"
 	"testing"
 
 	"github.com/maskraven/virt-viewer/internal/channel"
@@ -22,6 +24,12 @@ func TestDisplayAllowlist(t *testing.T) {
 		protocol.MsgDisplayDrawCopy,
 		protocol.MsgDisplaySurfaceCreate,
 		protocol.MsgDisplaySurfaceDestroy,
+		protocol.MsgDisplayStreamCreate,
+		protocol.MsgDisplayStreamData,
+		protocol.MsgDisplayStreamDataSized,
+		protocol.MsgDisplayStreamClip,
+		protocol.MsgDisplayStreamDestroy,
+		protocol.MsgDisplayStreamDestroyAll,
 	}
 	for _, typ := range allowed {
 		if !channel.IsDisplayAllowed(typ) {
@@ -29,10 +37,7 @@ func TestDisplayAllowlist(t *testing.T) {
 		}
 	}
 	if channel.IsDisplayAllowed(protocol.MsgDisplayDrawBlend) {
-		t.Error("DRAW_BLEND should not be allowlisted in Phase 1")
-	}
-	if channel.IsDisplayAllowed(protocol.MsgDisplayStreamCreate) {
-		t.Error("STREAM_CREATE should not be allowlisted")
+		t.Error("DRAW_BLEND should not be allowlisted")
 	}
 }
 
@@ -145,7 +150,7 @@ func TestDisplayDrawCopyLZDecodes(t *testing.T) {
 	}
 }
 
-func TestDisplayDrawCopyUnsupportedQuicSoftSkip(t *testing.T) {
+func TestDisplayDrawCopyInvalidQuicSoftSkip(t *testing.T) {
 	drv := display.NewNullDriver()
 	comp := display.NewCompositor(drv)
 	ch := channel.NewDisplay(nil, comp)
@@ -157,24 +162,42 @@ func TestDisplayDrawCopyUnsupportedQuicSoftSkip(t *testing.T) {
 	binary.LittleEndian.PutUint32(sc[16:20], protocol.SurfaceFlagPrimary)
 	_ = ch.HandleMessage(protocol.MsgDisplaySurfaceCreate, sc[:])
 
-	// Quic DRAW_COPY must soft-skip (not error) so Display.Run continues.
+	// Invalid Quic payload must soft-skip (not error) so Display.Run continues.
 	body := encodeDrawCopyQuicStub(0, image.Rect(0, 0, 2, 2))
 	if err := ch.HandleMessage(protocol.MsgDisplayDrawCopy, body); err != nil {
-		t.Fatalf("Quic DRAW_COPY must soft-skip, got fatal error: %v", err)
-	}
-	skips := ch.ImageSkipCounts()
-	if skips[protocol.ImageTypeQuic] < 1 {
-		t.Fatalf("expected Quic image skip, got %v", skips)
+		t.Fatalf("invalid Quic DRAW_COPY must soft-skip, got fatal error: %v", err)
 	}
 	if ch.DrawSkipCount() < 1 {
-		t.Fatal("expected draw skip count >= 1")
+		t.Fatal("expected draw skip count >= 1 for bad Quic")
 	}
-	// Second Quic op still non-fatal
+	// Second invalid Quic op still non-fatal
 	if err := ch.HandleMessage(protocol.MsgDisplayDrawCopy, body); err != nil {
 		t.Fatalf("second Quic skip: %v", err)
 	}
-	if ch.ImageSkipCounts()[protocol.ImageTypeQuic] < 2 {
+	if ch.DrawSkipCount() < 2 {
 		t.Fatal("expected second Quic skip counted")
+	}
+}
+
+func TestDisplayDrawCopyUnsupportedGLZSoftSkip(t *testing.T) {
+	drv := display.NewNullDriver()
+	comp := display.NewCompositor(drv)
+	ch := channel.NewDisplay(nil, comp)
+
+	var sc [20]byte
+	binary.LittleEndian.PutUint32(sc[4:8], 4)
+	binary.LittleEndian.PutUint32(sc[8:12], 4)
+	binary.LittleEndian.PutUint32(sc[12:16], protocol.SurfaceFmt32xRGB)
+	binary.LittleEndian.PutUint32(sc[16:20], protocol.SurfaceFlagPrimary)
+	_ = ch.HandleMessage(protocol.MsgDisplaySurfaceCreate, sc[:])
+
+	body := encodeDrawCopyUnsupportedType(0, image.Rect(0, 0, 2, 2), protocol.ImageTypeGLZRGB)
+	if err := ch.HandleMessage(protocol.MsgDisplayDrawCopy, body); err != nil {
+		t.Fatalf("GLZ DRAW_COPY must soft-skip: %v", err)
+	}
+	skips := ch.ImageSkipCounts()
+	if skips[protocol.ImageTypeGLZRGB] < 1 {
+		t.Fatalf("expected GLZ image skip, got %v", skips)
 	}
 }
 
@@ -222,12 +245,92 @@ func TestDisplaySurfaceCreateBoundsSoftSkip(t *testing.T) {
 
 func TestDisplayIgnoreUnknown(t *testing.T) {
 	ch := channel.NewDisplay(nil, display.NewCompositor(nil))
-	if err := ch.HandleMessage(protocol.MsgDisplayStreamCreate, []byte{1, 2, 3}); err != nil {
+	// DRAW_BLEND is not allowlisted.
+	if err := ch.HandleMessage(protocol.MsgDisplayDrawBlend, []byte{1, 2, 3}); err != nil {
 		t.Fatal(err)
 	}
 	counts := ch.UnknownCounts()
-	if counts[protocol.MsgDisplayStreamCreate] != 1 {
+	if counts[protocol.MsgDisplayDrawBlend] != 1 {
 		t.Fatalf("unknown counts: %v", counts)
+	}
+}
+
+func TestDisplayStreamMJPEG(t *testing.T) {
+	drv := display.NewNullDriver()
+	comp := display.NewCompositor(drv)
+	ch := channel.NewDisplay(nil, comp)
+
+	const w, h = 8, 8
+	var sc [20]byte
+	binary.LittleEndian.PutUint32(sc[4:8], w)
+	binary.LittleEndian.PutUint32(sc[8:12], h)
+	binary.LittleEndian.PutUint32(sc[12:16], protocol.SurfaceFmt32xRGB)
+	binary.LittleEndian.PutUint32(sc[16:20], protocol.SurfaceFlagPrimary)
+	if err := ch.HandleMessage(protocol.MsgDisplaySurfaceCreate, sc[:]); err != nil {
+		t.Fatal(err)
+	}
+
+	// STREAM_CREATE: surface 0, stream id 1, TOP_DOWN, MJPEG, 8x8 dest full surface
+	create := encodeStreamCreate(0, 1, protocol.StreamFlagTopDown, protocol.VideoCodecMJPEG,
+		w, h, image.Rect(0, 0, w, h))
+	if err := ch.HandleMessage(protocol.MsgDisplayStreamCreate, create); err != nil {
+		t.Fatalf("stream create: %v", err)
+	}
+
+	// Solid red JPEG frame
+	jb := encodeSolidJPEG(t, w, h, 255, 0, 0)
+	dataMsg := encodeStreamData(1, 0, jb)
+	if err := ch.HandleMessage(protocol.MsgDisplayStreamData, dataMsg); err != nil {
+		t.Fatalf("stream data: %v", err)
+	}
+	if ch.DrawSkipCount() != 0 {
+		t.Fatalf("unexpected draw skips: %d", ch.DrawSkipCount())
+	}
+	_ = ch.HandleMessage(protocol.MsgDisplayMark, nil)
+	pix, _, _, _ := drv.Snapshot()
+	// JPEG lossy: R should dominate
+	if pix[0] < 180 {
+		t.Fatalf("pixel R=%d want high red after MJPEG stream", pix[0])
+	}
+
+	// Destroy stream
+	var destroy [4]byte
+	binary.LittleEndian.PutUint32(destroy[:], 1)
+	if err := ch.HandleMessage(protocol.MsgDisplayStreamDestroy, destroy[:]); err != nil {
+		t.Fatal(err)
+	}
+	// Data after destroy soft-skips
+	if err := ch.HandleMessage(protocol.MsgDisplayStreamData, dataMsg); err != nil {
+		t.Fatal(err)
+	}
+	if ch.DrawSkipCount() < 1 {
+		t.Fatal("expected skip for data on destroyed stream")
+	}
+}
+
+func TestDisplayDrawCopyJPEG(t *testing.T) {
+	drv := display.NewNullDriver()
+	comp := display.NewCompositor(drv)
+	ch := channel.NewDisplay(nil, comp)
+
+	var sc [20]byte
+	binary.LittleEndian.PutUint32(sc[4:8], 4)
+	binary.LittleEndian.PutUint32(sc[8:12], 4)
+	binary.LittleEndian.PutUint32(sc[12:16], protocol.SurfaceFmt32xRGB)
+	binary.LittleEndian.PutUint32(sc[16:20], protocol.SurfaceFlagPrimary)
+	_ = ch.HandleMessage(protocol.MsgDisplaySurfaceCreate, sc[:])
+
+	body := encodeDrawCopyJPEG(0, image.Rect(0, 0, 4, 4), 4, 4, 0, 0, 255) // blue
+	if err := ch.HandleMessage(protocol.MsgDisplayDrawCopy, body); err != nil {
+		t.Fatalf("JPEG DRAW_COPY: %v", err)
+	}
+	if skips := ch.ImageSkipCounts(); skips[protocol.ImageTypeJPEG] != 0 {
+		t.Fatalf("JPEG must not soft-skip, got %v", skips)
+	}
+	_ = ch.HandleMessage(protocol.MsgDisplayMark, nil)
+	pix, _, _, _ := drv.Snapshot()
+	if pix[2] < 180 { // B channel high
+		t.Fatalf("pixel B=%d want high blue", pix[2])
 	}
 }
 
@@ -343,13 +446,18 @@ func encodeDrawCopyRaw(surfaceID uint32, box image.Rectangle, w, h int, b, g, r,
 	return body
 }
 
-// encodeDrawCopyQuicStub embeds a SpiceImage with type QUIC (still unsupported).
+// encodeDrawCopyQuicStub embeds a SpiceImage with type QUIC and invalid payload.
 func encodeDrawCopyQuicStub(surfaceID uint32, box image.Rectangle) []byte {
+	return encodeDrawCopyUnsupportedType(surfaceID, box, protocol.ImageTypeQuic)
+}
+
+// encodeDrawCopyUnsupportedType embeds a SpiceImage of the given type with dummy payload.
+func encodeDrawCopyUnsupportedType(surfaceID uint32, box image.Rectangle, imgType uint8) []byte {
 	base := appendDisplayBase(nil, surfaceID, box)
 	fixed := 36
 	imgOff := len(base) + fixed
 	img := make([]byte, protocol.SpiceImageDescSize+8)
-	img[8] = protocol.ImageTypeQuic
+	img[8] = imgType
 	binary.LittleEndian.PutUint32(img[10:14], 2)
 	binary.LittleEndian.PutUint32(img[14:18], 2)
 	body := make([]byte, imgOff+len(img))
@@ -363,6 +471,83 @@ func encodeDrawCopyQuicStub(surfaceID uint32, box image.Rectangle) []byte {
 	binary.LittleEndian.PutUint16(body[off:off+2], protocol.RopdOpPut)
 	copy(body[imgOff:], img)
 	return body
+}
+
+func encodeDrawCopyJPEG(surfaceID uint32, box image.Rectangle, w, h int, r, g, b byte) []byte {
+	base := appendDisplayBase(nil, surfaceID, box)
+	fixed := 36
+	imgOff := len(base) + fixed
+	jb := mustEncodeSolidJPEG(w, h, r, g, b)
+	img := make([]byte, protocol.SpiceImageDescSize+4+len(jb))
+	img[8] = protocol.ImageTypeJPEG
+	binary.LittleEndian.PutUint32(img[10:14], uint32(w))
+	binary.LittleEndian.PutUint32(img[14:18], uint32(h))
+	binary.LittleEndian.PutUint32(img[protocol.SpiceImageDescSize:protocol.SpiceImageDescSize+4], uint32(len(jb)))
+	copy(img[protocol.SpiceImageDescSize+4:], jb)
+
+	body := make([]byte, imgOff+len(img))
+	copy(body, base)
+	off := len(base)
+	binary.LittleEndian.PutUint32(body[off:off+4], uint32(imgOff))
+	off += 4
+	binary.LittleEndian.PutUint32(body[off:off+4], 0)
+	binary.LittleEndian.PutUint32(body[off+4:off+8], 0)
+	binary.LittleEndian.PutUint32(body[off+8:off+12], uint32(h))
+	binary.LittleEndian.PutUint32(body[off+12:off+16], uint32(w))
+	off += 16
+	binary.LittleEndian.PutUint16(body[off:off+2], protocol.RopdOpPut)
+	copy(body[imgOff:], img)
+	return body
+}
+
+func encodeStreamCreate(surfaceID, streamID uint32, flags, codec uint8, w, h int, dest image.Rectangle) []byte {
+	// surface_id, id, flags, codec, stamp u64, stream_w/h, src_w/h, dest rect, clip none
+	buf := make([]byte, protocol.StreamCreateFixedSize+1)
+	binary.LittleEndian.PutUint32(buf[0:4], surfaceID)
+	binary.LittleEndian.PutUint32(buf[4:8], streamID)
+	buf[8] = flags
+	buf[9] = codec
+	// stamp zero
+	binary.LittleEndian.PutUint32(buf[18:22], uint32(w))
+	binary.LittleEndian.PutUint32(buf[22:26], uint32(h))
+	binary.LittleEndian.PutUint32(buf[26:30], uint32(w))
+	binary.LittleEndian.PutUint32(buf[30:34], uint32(h))
+	binary.LittleEndian.PutUint32(buf[34:38], uint32(dest.Min.Y))
+	binary.LittleEndian.PutUint32(buf[38:42], uint32(dest.Min.X))
+	binary.LittleEndian.PutUint32(buf[42:46], uint32(dest.Max.Y))
+	binary.LittleEndian.PutUint32(buf[46:50], uint32(dest.Max.X))
+	buf[50] = protocol.ClipTypeNone
+	return buf
+}
+
+func encodeStreamData(streamID, mmTime uint32, frame []byte) []byte {
+	buf := make([]byte, 12+len(frame))
+	binary.LittleEndian.PutUint32(buf[0:4], streamID)
+	binary.LittleEndian.PutUint32(buf[4:8], mmTime)
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(len(frame)))
+	copy(buf[12:], frame)
+	return buf
+}
+
+func encodeSolidJPEG(t *testing.T, w, h int, r, g, b byte) []byte {
+	t.Helper()
+	return mustEncodeSolidJPEG(w, h, r, g, b)
+}
+
+func mustEncodeSolidJPEG(w, h int, r, g, b byte) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			off := y*img.Stride + x*4
+			img.Pix[off+0] = r
+			img.Pix[off+1] = g
+			img.Pix[off+2] = b
+			img.Pix[off+3] = 0xff
+		}
+	}
+	var buf bytes.Buffer
+	_ = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 95})
+	return buf.Bytes()
 }
 
 // encodeDrawCopyLZ builds DRAW_COPY with a solid-color LZ_RGB image (pure literals).

@@ -12,7 +12,7 @@ import (
 )
 
 // ErrUnsupportedImage is returned when DecodeSpiceImage sees a type that is
-// not yet implemented (Quic, JPEG, GLZ, …). Display channel soft-skips these.
+// not yet implemented (GLZ, surface-from-cache, …). Display channel soft-skips these.
 var ErrUnsupportedImage = errors.New("codec: unsupported image type")
 
 // UnsupportedImageError carries the SpiceImage type byte for skip counters.
@@ -35,7 +35,7 @@ type RGBA struct {
 }
 
 // DecodeSpiceImage decodes a SpiceImage starting at data (descriptor + payload).
-// Supports SPICE_IMAGE_TYPE_BITMAP (raw) and SPICE_IMAGE_TYPE_LZ_RGB.
+// Supports BITMAP, LZ_RGB, QUIC (RGB24/32), JPEG, and JPEG_ALPHA.
 // Other types return *UnsupportedImageError wrapping ErrUnsupportedImage.
 func DecodeSpiceImage(data []byte) (*RGBA, error) {
 	if len(data) < protocol.SpiceImageDescSize {
@@ -52,6 +52,12 @@ func DecodeSpiceImage(data []byte) (*RGBA, error) {
 		return DecodeBitmap(payload, width, height)
 	case protocol.ImageTypeLZRGB:
 		return DecodeLZRGB(payload, width, height)
+	case protocol.ImageTypeQuic:
+		return DecodeQuic(payload, width, height)
+	case protocol.ImageTypeJPEG:
+		return DecodeJPEG(payload, width, height)
+	case protocol.ImageTypeJPEGAlpha:
+		return DecodeJPEGAlpha(payload, width, height)
 	default:
 		return nil, &UnsupportedImageError{Type: typ}
 	}

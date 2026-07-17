@@ -23,10 +23,25 @@ import (
 // opaqueBlack is used when soft-skipping a failed DRAW_COPY (leave region black).
 var opaqueBlack = [4]byte{0, 0, 0, 0xff}
 
-// Display is the Phase-1 SPICE display channel reader/handler.
+// displayStream tracks an active SPICE video stream (Phase-2: MJPEG only).
+type displayStream struct {
+	surfaceID uint32
+	id        uint32
+	flags     uint8
+	codec     uint8
+	streamW   uint32
+	streamH   uint32
+	srcW      uint32
+	srcH      uint32
+	dest      image.Rectangle
+	clips     []image.Rectangle // nil = unclipped
+}
+
+// Display is the SPICE display channel reader/handler.
 //
 // It consumes mini-header framed messages on a linked display connection,
-// applies allowlisted draw ops to a compositor, and ignores unsupported types.
+// applies allowlisted draw ops and MJPEG streams to a compositor, and ignores
+// unsupported types.
 //
 // Draw/decode failures (unsupported image codecs, bounds, short payloads) are
 // soft-skipped: logged, optionally black-fill dest, and do not abort Run.
@@ -42,6 +57,7 @@ type Display struct {
 	unknown        map[uint16]int // ignored message types
 	imageSkipTypes map[uint8]int  // unsupported image types soft-skipped
 	drawSkips      int            // other soft-skipped draw/surface ops
+	streams        map[uint32]*displayStream
 	initSent       bool
 }
 
@@ -57,6 +73,7 @@ func NewDisplay(conn net.Conn, comp *display.Compositor) *Display {
 		comp:           comp,
 		unknown:        make(map[uint16]int),
 		imageSkipTypes: make(map[uint8]int),
+		streams:        make(map[uint32]*displayStream),
 	}
 }
 
@@ -156,6 +173,24 @@ func (d *Display) HandleMessage(typ uint16, data []byte) error {
 	case protocol.MsgDisplayDrawCopy:
 		d.handleDrawCopy(data)
 		return nil
+	case protocol.MsgDisplayStreamCreate:
+		d.handleStreamCreate(data)
+		return nil
+	case protocol.MsgDisplayStreamData:
+		d.handleStreamData(data, false)
+		return nil
+	case protocol.MsgDisplayStreamDataSized:
+		d.handleStreamData(data, true)
+		return nil
+	case protocol.MsgDisplayStreamClip:
+		d.handleStreamClip(data)
+		return nil
+	case protocol.MsgDisplayStreamDestroy:
+		d.handleStreamDestroy(data)
+		return nil
+	case protocol.MsgDisplayStreamDestroyAll:
+		d.handleStreamDestroyAll()
+		return nil
 	default:
 		// Allowlisted but not yet implemented (should not happen).
 		d.noteUnknown(typ)
@@ -163,8 +198,8 @@ func (d *Display) HandleMessage(typ uint16, data []byte) error {
 	}
 }
 
-// IsDisplayAllowed reports whether typ is in the Phase-1 display allowlist
-// (mode, mark, reset, draw_copy, draw_fill, surface create/destroy).
+// IsDisplayAllowed reports whether typ is in the display allowlist
+// (mode, mark, reset, draw_copy, draw_fill, surface create/destroy, streams).
 func IsDisplayAllowed(typ uint16) bool {
 	switch typ {
 	case protocol.MsgDisplayMode,
@@ -173,7 +208,13 @@ func IsDisplayAllowed(typ uint16) bool {
 		protocol.MsgDisplayDrawFill,
 		protocol.MsgDisplayDrawCopy,
 		protocol.MsgDisplaySurfaceCreate,
-		protocol.MsgDisplaySurfaceDestroy:
+		protocol.MsgDisplaySurfaceDestroy,
+		protocol.MsgDisplayStreamCreate,
+		protocol.MsgDisplayStreamData,
+		protocol.MsgDisplayStreamDataSized,
+		protocol.MsgDisplayStreamClip,
+		protocol.MsgDisplayStreamDestroy,
+		protocol.MsgDisplayStreamDestroyAll:
 		return true
 	default:
 		return false
@@ -421,6 +462,239 @@ func (d *Display) softBlackFill(base displayBase) {
 	_ = d.comp.Fill(base.SurfaceID, base.Box, opaqueBlack, base.Clips)
 }
 
+// handleStreamCreate parses SpiceMsgDisplayStreamCreate and records the stream.
+//
+// Wire (packed): surface_id u32, id u32, flags u8, codec_type u8, stamp u64,
+// stream_width/height u32, src_width/height u32, dest Rect, Clip.
+func (d *Display) handleStreamCreate(data []byte) {
+	if len(data) < protocol.StreamCreateFixedSize+1 { // +1 for clip type at minimum
+		d.noteDrawSkip(fmt.Sprintf("STREAM_CREATE short: %d", len(data)))
+		return
+	}
+	surfaceID := binary.LittleEndian.Uint32(data[0:4])
+	id := binary.LittleEndian.Uint32(data[4:8])
+	flags := data[8]
+	codecType := data[9]
+	// stamp at [10:18] ignored
+	streamW := binary.LittleEndian.Uint32(data[18:22])
+	streamH := binary.LittleEndian.Uint32(data[22:26])
+	srcW := binary.LittleEndian.Uint32(data[26:30])
+	srcH := binary.LittleEndian.Uint32(data[30:34])
+	dest, err := decodeRect(data, 34)
+	if err != nil {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_CREATE dest: %v", err))
+		return
+	}
+	// Clip starts at offset 50.
+	clips, _, err := decodeClipAt(data, protocol.StreamCreateFixedSize)
+	if err != nil {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_CREATE clip: %v", err))
+		return
+	}
+
+	if codecType != protocol.VideoCodecMJPEG {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_CREATE unsupported codec %d (stream %d)", codecType, id))
+		// Still record so later DATA soft-skips cleanly? Prefer not to store
+		// unsupported codecs — DATA will note "unknown stream".
+		return
+	}
+
+	st := &displayStream{
+		surfaceID: surfaceID,
+		id:        id,
+		flags:     flags,
+		codec:     codecType,
+		streamW:   streamW,
+		streamH:   streamH,
+		srcW:      srcW,
+		srcH:      srcH,
+		dest:      dest,
+		clips:     clips,
+	}
+	d.mu.Lock()
+	if d.streams == nil {
+		d.streams = make(map[uint32]*displayStream)
+	}
+	d.streams[id] = st
+	d.mu.Unlock()
+}
+
+// handleStreamData presents one stream frame. sized=true for STREAM_DATA_SIZED.
+//
+// STREAM_DATA: id u32, mm_time u32, data_size u32, data[]
+// STREAM_DATA_SIZED: id u32, mm_time u32, width u32, height u32, dest Rect, data_size u32, data[]
+func (d *Display) handleStreamData(data []byte, sized bool) {
+	if len(data) < protocol.StreamDataHeaderSize+4 {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA short: %d", len(data)))
+		return
+	}
+	id := binary.LittleEndian.Uint32(data[0:4])
+	// multi_media_time at [4:8] ignored for Phase 2 present-immediately path
+	off := protocol.StreamDataHeaderSize
+
+	d.mu.Lock()
+	st := d.streams[id]
+	d.mu.Unlock()
+	if st == nil {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA unknown stream %d", id))
+		return
+	}
+
+	dest := st.dest
+	if sized {
+		if off+4+4+16+4 > len(data) {
+			d.noteDrawSkip("STREAM_DATA_SIZED header short")
+			return
+		}
+		// width/height at off; dest after
+		off += 8
+		r, err := decodeRect(data, off)
+		if err != nil {
+			d.noteDrawSkip(fmt.Sprintf("STREAM_DATA_SIZED dest: %v", err))
+			return
+		}
+		dest = r
+		off += 16
+	}
+
+	if off+4 > len(data) {
+		d.noteDrawSkip("STREAM_DATA data_size short")
+		return
+	}
+	dataSize := binary.LittleEndian.Uint32(data[off : off+4])
+	off += 4
+	if dataSize == 0 || int64(dataSize) > protocol.MaxSurfaceBytes {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA bad data_size %d", dataSize))
+		return
+	}
+	if off+int(dataSize) > len(data) {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA truncated: have %d need %d", len(data)-off, dataSize))
+		return
+	}
+	frame := data[off : off+int(dataSize)]
+
+	if st.codec != protocol.VideoCodecMJPEG {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA codec %d not MJPEG", st.codec))
+		return
+	}
+
+	img, err := codec.DecodeJPEGBytes(frame)
+	if err != nil {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA mjpeg: %v", err))
+		return
+	}
+	// BOTTOM-UP stream: flip when TOP_DOWN flag is clear.
+	if st.flags&protocol.StreamFlagTopDown == 0 {
+		flipRGBA(img)
+	}
+
+	// If dest is empty, use stream dimensions at origin.
+	if dest.Empty() {
+		dest = image.Rect(0, 0, int(st.streamW), int(st.streamH))
+		if dest.Empty() {
+			dest = image.Rect(0, 0, img.Width, img.Height)
+		}
+	}
+	// Scale is not implemented: blit top-left of frame into dest size (clip to img).
+	srcOrigin := image.Pt(0, 0)
+	if err := d.comp.Copy(st.surfaceID, dest, img, srcOrigin, st.clips); err != nil {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA present: %v", err))
+	}
+}
+
+func (d *Display) handleStreamClip(data []byte) {
+	if len(data) < 4+1 {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_CLIP short: %d", len(data)))
+		return
+	}
+	id := binary.LittleEndian.Uint32(data[0:4])
+	clips, _, err := decodeClipAt(data, 4)
+	if err != nil {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_CLIP: %v", err))
+		return
+	}
+	d.mu.Lock()
+	st := d.streams[id]
+	if st != nil {
+		st.clips = clips
+	}
+	d.mu.Unlock()
+	if st == nil {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_CLIP unknown stream %d", id))
+	}
+}
+
+func (d *Display) handleStreamDestroy(data []byte) {
+	if len(data) < 4 {
+		d.noteDrawSkip(fmt.Sprintf("STREAM_DESTROY short: %d", len(data)))
+		return
+	}
+	id := binary.LittleEndian.Uint32(data[0:4])
+	d.mu.Lock()
+	delete(d.streams, id)
+	d.mu.Unlock()
+}
+
+func (d *Display) handleStreamDestroyAll() {
+	d.mu.Lock()
+	d.streams = make(map[uint32]*displayStream)
+	d.mu.Unlock()
+}
+
+// flipRGBA vertically flips img in place (stream bottom-up frames).
+func flipRGBA(img *codec.RGBA) {
+	if img == nil || img.Height < 2 {
+		return
+	}
+	row := make([]byte, img.Stride)
+	for y := 0; y < img.Height/2; y++ {
+		top := y * img.Stride
+		bot := (img.Height - 1 - y) * img.Stride
+		copy(row, img.Pix[top:top+img.Stride])
+		copy(img.Pix[top:top+img.Stride], img.Pix[bot:bot+img.Stride])
+		copy(img.Pix[bot:bot+img.Stride], row)
+	}
+}
+
+// decodeClipAt reads a SpiceClip at off; returns clips and new offset.
+// Nil clips = CLIP_NONE; non-nil empty = CLIP_RECTS with 0 rects.
+func decodeClipAt(data []byte, off int) ([]image.Rectangle, int, error) {
+	if off >= len(data) {
+		return nil, off, fmt.Errorf("clip short")
+	}
+	clipType := data[off]
+	off++
+	switch clipType {
+	case protocol.ClipTypeNone:
+		return nil, off, nil
+	case protocol.ClipTypeRects:
+		if off+4 > len(data) {
+			return nil, 0, fmt.Errorf("clip num_rects short")
+		}
+		n := binary.LittleEndian.Uint32(data[off : off+4])
+		off += 4
+		if n > 4096 {
+			return nil, 0, fmt.Errorf("clip num_rects %d too large", n)
+		}
+		need := off + int(n)*16
+		if need > len(data) {
+			return nil, 0, fmt.Errorf("clip rects truncated")
+		}
+		clips := make([]image.Rectangle, n)
+		for i := uint32(0); i < n; i++ {
+			r, err := decodeRect(data, off)
+			if err != nil {
+				return nil, 0, err
+			}
+			clips[i] = r
+			off += 16
+		}
+		return clips, off, nil
+	default:
+		return nil, 0, fmt.Errorf("invalid clip type %d", clipType)
+	}
+}
+
 // displayBase is the decoded SpiceMsgDisplayBase prefix of draw messages.
 type displayBase struct {
 	SurfaceID uint32
@@ -441,40 +715,12 @@ func decodeDisplayBase(data []byte) (displayBase, int, error) {
 		return displayBase{}, 0, err
 	}
 	b.Box = box
-	off := 20
-	clipType := data[off]
-	off++
-	switch clipType {
-	case protocol.ClipTypeNone:
-		// Clips remains nil → unclipped
-		return b, off, nil
-	case protocol.ClipTypeRects:
-		if off+4 > len(data) {
-			return displayBase{}, 0, fmt.Errorf("clip num_rects short")
-		}
-		n := binary.LittleEndian.Uint32(data[off : off+4])
-		off += 4
-		if n > 4096 {
-			return displayBase{}, 0, fmt.Errorf("clip num_rects %d too large", n)
-		}
-		need := off + int(n)*16
-		if need > len(data) {
-			return displayBase{}, 0, fmt.Errorf("clip rects truncated")
-		}
-		// Non-nil even when n==0: empty clip list means draw nothing.
-		b.Clips = make([]image.Rectangle, n)
-		for i := uint32(0); i < n; i++ {
-			r, err := decodeRect(data, off)
-			if err != nil {
-				return displayBase{}, 0, err
-			}
-			b.Clips[i] = r
-			off += 16
-		}
-		return b, off, nil
-	default:
-		return displayBase{}, 0, fmt.Errorf("invalid clip type %d", clipType)
+	clips, off, err := decodeClipAt(data, 20)
+	if err != nil {
+		return displayBase{}, 0, err
 	}
+	b.Clips = clips
+	return b, off, nil
 }
 
 // decodeRect reads a SpiceRect (top, left, bottom, right) at off.

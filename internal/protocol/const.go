@@ -268,6 +268,28 @@ const (
 // pixmap_cache_id u8 + pixmap_cache_size i64 + glz_dictionary_id u8 + glz_dictionary_window_size i32.
 const DisplayInitBodySize = 14
 
+// Video codec types (SpiceVideoCodecType).
+const (
+	VideoCodecMJPEG uint8 = 1 // SPICE_VIDEO_CODEC_TYPE_MJPEG
+	VideoCodecVP8   uint8 = 2
+	VideoCodecH264  uint8 = 3
+	VideoCodecVP9   uint8 = 4
+	VideoCodecH265  uint8 = 5
+)
+
+// Stream flags (SpiceStreamFlags).
+const (
+	StreamFlagTopDown uint8 = 1 << 0 // SPICE_STREAM_FLAGS_TOP_DOWN
+)
+
+// StreamCreateFixedSize is the fixed prefix of SpiceMsgDisplayStreamCreate
+// before Clip: surface_id u32 + id u32 + flags u8 + codec u8 + stamp u64 +
+// stream_w/h u32×2 + src_w/h u32×2 + dest Rect 16 = 50.
+const StreamCreateFixedSize = 50
+
+// StreamDataHeaderSize is sizeof(SpiceStreamDataHeader): id u32 + multi_media_time u32.
+const StreamDataHeaderSize = 8
+
 // Image types (SpiceImageType).
 const (
 	ImageTypeBitmap            uint8 = 0
