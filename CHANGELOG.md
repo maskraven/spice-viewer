@@ -7,10 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned
+### Phase 2 — Desktop comfort
 
+#### Added
+
+- **vdagent** (`internal/agent`, `pkg/spice`): capability announce, UTF-8 clipboard grab/request/data, monitors config (guest resize)
+  - GUI **Edit → Copy from guest / Paste to guest**; status `agent=on/off`
+  - Requires guest `spice-vdagent` (or Windows SPICE tools)
+- **Codecs**: Quic (RGB24/32), JPEG / JPEG-Alpha, MJPEG display streams
+- **Audio**: playback channel best-effort (RAW S16LE PCM → `PlaybackDriver`; default NullPlayback)
+- **UI**: Send Keys menu, Type text…, toolbar CAD/Ungrab/Fullscreen/Paste
+- **Packaging scaffold**: `.goreleaser.yaml`, `packaging/remote-viewer.desktop`, MIME `application/x-virt-viewer`
+
+#### Planned (Phase 3+)
+
+- GLZ / H.264 (license-aware)
+- USB redirection, WebDAV, record channel
+- Host audio sink beyond NullPlayback (platform packages)
 - Live Proxmox operator sign-off updates in `docs/acceptance-v0.1.md`
-- Packaging / goreleaser artifacts (post-MVP)
 
 ## [0.1.0] — Phase 1 Proxmox MVP
 

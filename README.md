@@ -4,23 +4,25 @@ A greenfield, library-first [SPICE](https://www.spice-space.org/) remote display
 
 **Module:** `github.com/maskraven/virt-viewer` · **License:** [Apache-2.0](LICENSE) · **CLI:** `remote-viewer`
 
-## Status — v0.1 (Phase 1)
+## Status — Phase 2 (desktop comfort) on top of v0.1
 
-**v0.1** is the Phase 1 Proxmox MVP cut line:
+**v0.1** Proxmox MVP is complete. **Phase 2** adds guest agent clipboard, richer codecs, audio playback, and packaging.
 
 | Area | State |
 |------|--------|
 | Parse Proxmox / virt-viewer `.vv` | Implemented (`pkg/vvfile`) |
 | HTTP CONNECT spiceproxy + TLS CA + `host-subject` pin | Implemented (`internal/connector`) |
 | AuthSpice ticket, multi-channel session | Implemented (`pkg/spice`, session/channel) |
-| Display (raw + LZ), inputs, cursor best-effort | Implemented |
-| GUI (`remote-viewer`) + headless (`--headless`) | Implemented (Fyne + NullDriver) |
-| Automated tests (`go test ./...`) + CI | Required green |
+| Display raw + LZ + **Quic + JPEG + MJPEG streams** | Implemented (`internal/codec`) |
+| Inputs, cursor, **playback (best-effort)** | Implemented |
+| **vdagent**: clipboard text + monitors config | Implemented (`internal/agent`) — needs `spice-vdagent` in guest |
+| GUI: Send Keys, Edit copy/paste, grab, hotkeys | Implemented (Fyne) |
+| Headless (`--headless`) | Implemented |
+| Packaging (`.desktop`, MIME, goreleaser) | Scaffold under `packaging/` + `.goreleaser.yaml` |
 | Live Proxmox lab acceptance | **Pending operator sign-off** (not in CI) |
 
 There is **no** auto-reconnect for short-lived tickets: after expiry or disconnect, open Console again in Proxmox for a new `.vv`.
 
-Acceptance and tag readiness: [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md).  
 Changelog: [CHANGELOG.md](CHANGELOG.md).
 
 ## Goals (product)
@@ -71,6 +73,21 @@ Fyne pulls platform GUI dependencies on first build (OpenGL / OS window stack). 
 ```
 
 Product semantics: if the file sets `delete-this-file=1`, it is removed **after parse, before dial**.
+
+**Daily use (GUI)**
+
+| Feature | How |
+|---------|-----|
+| Grab keyboard/mouse | Click the guest display |
+| Release grab | **Ctrl+Alt+R** / View → Ungrab / toolbar |
+| **Ctrl+Alt+Del** | **Send Keys** menu or toolbar (host may steal the real chord) |
+| Other chords | **Send Keys** (Ctrl+Alt+Fn, Super, Alt+Tab, Task Manager, …) |
+| **Copy/paste** | **Edit → Copy from guest / Paste to guest** (needs **spice-vdagent** in the VM) |
+| Paste without agent | Edit → Type text… or Paste falls back to US-QWERTY keystrokes |
+| Fullscreen | **Shift+F11** / toolbar |
+| Status bar | title · grab · mouse mode · **agent=on/off** |
+
+Guest clipboard requires: SPICE agent channel on the VM + `spice-vdagent` (Linux) or SPICE guest tools (Windows).
 
 ### Headless
 

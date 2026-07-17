@@ -1,0 +1,75 @@
+# Goreleaser config for remote-viewer (Phase 2 packaging).
+# Docs: https://goreleaser.com
+version: 2
+
+project_name: remote-viewer
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: remote-viewer
+    main: ./cmd/remote-viewer
+    binary: remote-viewer
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - docs/proxmox.md
+      - packaging/*
+
+nfpms:
+  - id: remote-viewer
+    package_name: remote-viewer-spice
+    homepage: https://github.com/maskraven/virt-viewer
+    maintainer: maskraven
+    description: SPICE remote display client with Proxmox Console support
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+    binds:
+      - packaging/remote-viewer.desktop:/usr/share/applications/remote-viewer.desktop
+      - packaging/remote-viewer.xml:/usr/share/mime/packages/remote-viewer.xml
+    dependencies:
+      - libgl1
+    recommends:
+      - spice-vdagent
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: true
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
