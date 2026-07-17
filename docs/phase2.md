@@ -20,7 +20,7 @@ Phase 2 builds on the v0.1 Proxmox MVP. This document is the operator/developer 
 2. Inside the guest:
    - **Linux:** install and run `spice-vdagent` (and often `spice-vdagentd`).
    - **Windows:** install SPICE guest tools with vdagent.
-3. Open a fresh Console `.vv` with `remote-viewer`.
+3. Open a fresh Console `.vv` with `spice-viewer`.
 4. Status bar should show **`agent=on`** when capabilities are exchanged.
 5. Use **Edit → Paste to guest** / **Copy from guest**.
 

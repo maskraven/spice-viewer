@@ -1,8 +1,8 @@
-# virt-viewer (Go)
+# spice-viewer
 
 A greenfield, library-first [SPICE](https://www.spice-space.org/) remote display client written in Go.
 
-**Module:** `github.com/maskraven/virt-viewer` · **License:** [Apache-2.0](LICENSE) · **CLI:** `remote-viewer`
+**Module:** `github.com/maskraven/virt-viewer` · **License:** [Apache-2.0](LICENSE) · **CLI:** `spice-viewer`
 
 ## Status — Phase 2 + Phase 3 stretch on top of v0.1
 
@@ -32,7 +32,7 @@ Changelog: [CHANGELOG.md](CHANGELOG.md).
 ## Goals (product)
 
 - **Proxmox-first**: open a downloaded `pve-spice.vv` and establish a session through Proxmox’s HTTP CONNECT spiceproxy, TLS with embedded CA + `host-subject` verification, and SPICE ticket authentication.
-- **Single binary** for macOS, Linux, and Windows (`cmd/remote-viewer`).
+- **Single binary** for macOS, Linux, and Windows (`cmd/spice-viewer`).
 - **Library-first** (`pkg/spice`, `pkg/vvfile`) so CLI, GUI, and tooling share one session stack.
 - **Phase 1 pure Go only** (Apache-2.0); no spice-common C, FFmpeg, or libusb.
 
@@ -54,15 +54,15 @@ Requires **Go 1.22+**. Product packages need **native** `CGO_ENABLED=1` builds (
 ```bash
 git clone https://github.com/maskraven/virt-viewer.git
 cd virt-viewer
-go build -o remote-viewer ./cmd/remote-viewer
-./remote-viewer -h
-./remote-viewer -version
+go build -o spice-viewer ./cmd/spice-viewer
+./spice-viewer -h
+./spice-viewer -version
 ```
 
 Optional release version stamp:
 
 ```bash
-go build -ldflags "-X main.Version=v0.1.0" -o remote-viewer ./cmd/remote-viewer
+go build -ldflags "-X main.Version=v0.1.0" -o spice-viewer ./cmd/spice-viewer
 ```
 
 ### Product packages (all platforms)
@@ -86,7 +86,7 @@ Fyne pulls platform GUI dependencies on first build (OpenGL / OS window stack). 
 2. Open immediately:
 
 ```bash
-./remote-viewer ~/Downloads/pve-spice.vv
+./spice-viewer ~/Downloads/pve-spice.vv
 ```
 
 Product semantics: if the file sets `delete-this-file=1`, it is removed **after parse, before dial**.
@@ -109,7 +109,7 @@ Guest clipboard requires: SPICE agent channel on the VM + `spice-vdagent` (Linux
 ### Headless
 
 ```bash
-./remote-viewer --headless /path/to/pve-spice.vv
+./spice-viewer --headless /path/to/pve-spice.vv
 ```
 
 Connects with a null display/cursor driver, prints `connected`, and waits until disconnect or Ctrl+C. Useful for CI-style smoke tests against a lab endpoint.
@@ -162,7 +162,7 @@ Status: automated tests are the CI bar; **manual Proxmox lab remains pending ope
 
 | Path | Role |
 |------|------|
-| `cmd/remote-viewer` | Product binary (GUI default; `--headless`) |
+| `cmd/spice-viewer` | Product binary (GUI default; `--headless`) |
 | `pkg/spice` | Public library root (Connect, events, drivers) |
 | `pkg/vvfile` | Public `.vv` parse API |
 | `internal/connector` | TCP / TLS / HTTP CONNECT dialer |

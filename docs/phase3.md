@@ -154,7 +154,7 @@ pkg-config --exists libavcodec && echo "libavcodec OK"
 
 If decode still fails after install:
 
-1. Confirm `remote-viewer` is the native binary (not a sandbox without host libs).
+1. Confirm `spice-viewer` is the native binary (not a sandbox without host libs).
 2. Check status/logs for `h264: OS decoder unavailable` / FFmpeg probe errors.
 3. Ensure the guest is actually sending H.264 streams (many Proxmox/QXL guests
    use LZ/JPEG/MJPEG only — no FFmpeg needed for those).
@@ -253,7 +253,7 @@ Wire after `DISPLAY_INIT`: `PREFERRED_COMPRESSION` + `PREFERRED_VIDEO_CODEC_TYPE
 Caps advertised: `PREF_COMPRESSION`, `PREF_VIDEO_CODEC_TYPE`.
 
 ```bash
-remote-viewer --profile=wan file.vv
+spice-viewer --profile=wan file.vv
 ```
 
 GUI: **Profile** menu (re-sends prefs on a live session).

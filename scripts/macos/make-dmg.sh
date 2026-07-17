@@ -6,7 +6,7 @@ set -euo pipefail
 VERSION="${VERSION:-dev}"
 APP="${1:?usage: make-dmg.sh <App.app> [out.dmg]}"
 VER_CLEAN="${VERSION#v}"
-OUT="${2:-dist/Remote-Viewer-${VER_CLEAN}-macos.dmg}"
+OUT="${2:-dist/Spice-Viewer-${VER_CLEAN}-macos.dmg}"
 
 if [[ ! -d "$APP" ]]; then
 	echo "make-dmg: app not found: $APP" >&2
@@ -22,7 +22,7 @@ ln -s /Applications "$STAGE/Applications"
 mkdir -p "$(dirname "$OUT")"
 rm -f "$OUT"
 hdiutil create \
-	-volname "Remote Viewer ${VER_CLEAN}" \
+	-volname "SPICE Viewer ${VER_CLEAN}" \
 	-srcfolder "$STAGE" \
 	-ov -format UDZO \
 	"$OUT"

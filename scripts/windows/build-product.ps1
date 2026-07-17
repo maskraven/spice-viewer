@@ -1,5 +1,5 @@
 # Build Windows product artifacts (must run on Windows with CGO + MinGW/MSVC).
-# Produces: remote-viewer.exe (GUI), zip, optional NSIS installer.
+# Produces: spice-viewer.exe (GUI), zip, optional NSIS installer.
 # Usage: .\scripts\windows\build-product.ps1 -Version v0.2.0
 param(
     [string]$Version = "dev"
@@ -22,7 +22,7 @@ Push-Location $winresDir
 try {
     if (Get-Command go -ErrorAction SilentlyContinue) {
         Write-Host "==> go-winres (optional)"
-        go run github.com/tc-hib/go-winres@v0.3.3 make --in winres.json --out (Join-Path $Root "cmd\remote-viewer\rsrc") --arch amd64 2>$null
+        go run github.com/tc-hib/go-winres@v0.3.3 make --in winres.json --out (Join-Path $Root "cmd\spice-viewer\rsrc") --arch amd64 2>$null
     }
 } catch {
     Write-Host "go-winres skipped: $_"
@@ -31,8 +31,8 @@ try {
 }
 
 Write-Host "==> go build windows/amd64 (cgo + windowsgui)"
-$exe = Join-Path $Dist "remote-viewer.exe"
-go build -trimpath -ldflags $ldflags -o $exe ./cmd/remote-viewer
+$exe = Join-Path $Dist "spice-viewer.exe"
+go build -trimpath -ldflags $ldflags -o $exe ./cmd/spice-viewer
 
 Copy-Item (Join-Path $Root "LICENSE") $Dist -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $Root "README.md") $Dist -ErrorAction SilentlyContinue
@@ -40,9 +40,9 @@ Copy-Item (Join-Path $Root "CHANGELOG.md") $Dist -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $Root "docs\proxmox.md") $Dist -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $Root "packaging\windows\associate-hkcu.ps1") $Dist -ErrorAction SilentlyContinue
 
-$zip = Join-Path $Dist "remote-viewer_${VerClean}_windows_amd64.zip"
+$zip = Join-Path $Dist "spice-viewer_${VerClean}_windows_amd64.zip"
 if (Test-Path $zip) { Remove-Item $zip }
-Compress-Archive -Path (Join-Path $Dist "remote-viewer.exe"), (Join-Path $Dist "LICENSE"), (Join-Path $Dist "README.md"), (Join-Path $Dist "associate-hkcu.ps1") `
+Compress-Archive -Path (Join-Path $Dist "spice-viewer.exe"), (Join-Path $Dist "LICENSE"), (Join-Path $Dist "README.md"), (Join-Path $Dist "associate-hkcu.ps1") `
     -DestinationPath $zip -Force
 
 # NSIS installer if makensis is on PATH
@@ -51,9 +51,9 @@ if ($nsis) {
     Write-Host "==> NSIS installer"
     $nsi = Join-Path $Root "packaging\windows\installer.nsi"
     & makensis "/DVERSION=$VerClean" "/DSOURCE_DIR=$Dist" $nsi
-    $setup = Join-Path $Root "remote-viewer-setup-$VerClean-amd64.exe"
+    $setup = Join-Path $Root "spice-viewer-setup-$VerClean-amd64.exe"
     if (Test-Path $setup) {
-        Move-Item -Force $setup (Join-Path $Dist "remote-viewer-setup-$VerClean-amd64.exe")
+        Move-Item -Force $setup (Join-Path $Dist "spice-viewer-setup-$VerClean-amd64.exe")
     }
 } else {
     Write-Host "makensis not found; zip-only (install NSIS for setup.exe)"

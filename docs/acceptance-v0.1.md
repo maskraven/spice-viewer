@@ -1,6 +1,6 @@
 # v0.1 acceptance (Phase 1 Proxmox MVP)
 
-This document records **acceptance status** for the Phase 1 cut line (product binary `remote-viewer`, library `pkg/spice` + `pkg/vvfile`). It is intentionally honest: automated gates that run in CI are marked pass/fail from the tree; **live Proxmox is not available in CI** and remains operator-owned.
+This document records **acceptance status** for the Phase 1 cut line (product binary `spice-viewer`, library `pkg/spice` + `pkg/vvfile`). It is intentionally honest: automated gates that run in CI are marked pass/fail from the tree; **live Proxmox is not available in CI** and remains operator-owned.
 
 Design baseline: [design-spice-viewer-go.md](design-spice-viewer-go.md) (Phase 1 — Proxmox MVP).  
 Operator checklist and CONNECT/TLS/ticket notes: [proxmox.md](proxmox.md).
@@ -57,7 +57,7 @@ From the design doc global Phase 1 DoD:
 
 | Criterion | Evidence / status |
 |-----------|-------------------|
-| `remote-viewer pve-spice.vv` works against Proxmox VE (display + inputs) | Manual — **pending operator sign-off** |
+| `spice-viewer pve-spice.vv` works against Proxmox VE (display + inputs) | Manual — **pending operator sign-off** |
 | CONNECT authority + TLS subject + ticket documented and tested | Docs: `proxmox.md`; tests: connector/security/vvfile — **automated pass** |
 | Multi-channel MAIN_INIT session_id; ticket re-encrypt per channel | Session/channel unit + mock tests — **automated pass** |
 | Cursor best-effort; desktop usable without cursor | Implementation + unit tests — **automated pass**; Proxmox feel — **pending** |
@@ -84,14 +84,14 @@ No git tag is created by this documentation PR. When cutting **v0.1.0**:
 3. **Tag command (operator)**  
 
    ```bash
-   git tag -a v0.1.0 -m "v0.1.0: Phase 1 Proxmox MVP (remote-viewer)"
+   git tag -a v0.1.0 -m "v0.1.0: Phase 1 Proxmox MVP (spice-viewer)"
    git push origin v0.1.0
    ```
 
 4. **Version string**  
-   - Development default is `dev` (`cmd/remote-viewer` `Version` var).  
+   - Development default is `dev` (`cmd/spice-viewer` `Version` var).  
    - Release builds may set:  
-     `go build -ldflags "-X main.Version=v0.1.0" -o remote-viewer ./cmd/remote-viewer`
+     `go build -ldflags "-X main.Version=v0.1.0" -o spice-viewer ./cmd/spice-viewer`
 
 5. **Do not tag if**  
    - `go test ./...` fails  
@@ -127,7 +127,7 @@ Default gates remain: `go test ./...`, `go vet`, `gofmt`, `./scripts/check_impor
 
 | Path | Role |
 |------|------|
-| `cmd/remote-viewer` | Product binary (GUI default, `--headless`) |
+| `cmd/spice-viewer` | Product binary (GUI default, `--headless`) |
 | `pkg/spice` | Public session API |
 | `pkg/vvfile` | Public `.vv` parse API |
 | `internal/connector` | CONNECT + TLS + DN pin |

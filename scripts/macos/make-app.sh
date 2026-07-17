@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a macOS .app bundle from a remote-viewer binary.
+# Build a macOS .app bundle from a spice-viewer binary.
 # Usage: VERSION=0.2.0 ./scripts/macos/make-app.sh <binary> [out_dir]
 set -euo pipefail
 
@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VERSION="${VERSION:-dev}"
 BINARY="${1:?usage: make-app.sh <binary> [out_dir]}"
 OUT_DIR="${2:-$ROOT/dist}"
-APP_NAME="Remote Viewer"
+APP_NAME="SPICE Viewer"
 APP="$OUT_DIR/${APP_NAME}.app"
 
 if [[ ! -f "$BINARY" ]]; then
@@ -24,8 +24,8 @@ sed -e "s/@VERSION@/${VER_CLEAN}/g" \
 	"$ROOT/packaging/macos/Info.plist.in" \
 	>"$APP/Contents/Info.plist"
 
-cp "$BINARY" "$APP/Contents/MacOS/remote-viewer"
-chmod +x "$APP/Contents/MacOS/remote-viewer"
+cp "$BINARY" "$APP/Contents/MacOS/spice-viewer"
+chmod +x "$APP/Contents/MacOS/spice-viewer"
 
 if [[ -f "$ROOT/packaging/macos/AppIcon.icns" ]]; then
 	cp "$ROOT/packaging/macos/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"

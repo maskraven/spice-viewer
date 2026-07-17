@@ -1,6 +1,6 @@
-# Built binaries (README: go build -o remote-viewer ./cmd/remote-viewer)
-/remote-viewer
-/remote-viewer.exe
+# Built binaries (README: go build -o spice-viewer ./cmd/spice-viewer)
+/spice-viewer
+/spice-viewer.exe
 *.exe
 
 # Go test / coverage artifacts
@@ -23,7 +23,7 @@ testdata/records/*.bin
 .DS_Store
 
 # Generated Windows resources (go-winres)
-cmd/remote-viewer/rsrc_windows_*.syso
+cmd/spice-viewer/rsrc_windows_*.syso
 
 # Local package output
 /dist/

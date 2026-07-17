@@ -22,7 +22,7 @@
 #   See scripts/README.md and testdata/records/README.md.
 #
 # Requirements: qemu-system-x86_64 (or $QEMU) built with SPICE support.
-# Optional: remote-viewer for manual cross-check.
+# Optional: spice-viewer for manual cross-check.
 #
 # Safety: SPICE always binds addr=127.0.0.1 (localhost only). SPICE_PORT must be
 # digits-only; SPICE_PASSWORD must not contain ',' or newlines (QEMU -spice CSV).
@@ -174,8 +174,8 @@ echo "Starting QEMU SPICE lab on 127.0.0.1:${SPICE_PORT} password=${SPICE_PASSWO
 echo "Sample .vv:"
 print_vv
 echo "---"
-echo "Cross-check: remote-viewer spice://127.0.0.1:${SPICE_PORT}?password=${SPICE_PASSWORD}"
-echo "Or: remote-viewer <( $0 --print-vv )"
+echo "Cross-check: spice-viewer spice://127.0.0.1:${SPICE_PORT}?password=${SPICE_PASSWORD}"
+echo "Or: spice-viewer <( $0 --print-vv )"
 echo "Integration: SPICE_PORT=${SPICE_PORT} SPICE_PASSWORD=… ./scripts/run_integration.sh"
 echo "Stop with Ctrl-C."
 echo "---"

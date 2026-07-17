@@ -70,7 +70,7 @@ func TestParseArgs_Help(t *testing.T) {
 		t.Fatalf("err = %v, want flag.ErrHelp", err)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "Usage: remote-viewer") {
+	if !strings.Contains(out, "Usage: spice-viewer") {
 		t.Fatalf("help missing usage: %q", out)
 	}
 	if !strings.Contains(out, "-headless") {
@@ -98,7 +98,7 @@ func TestRun_NoArgsPrintsHelp(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit = %d", code)
 	}
-	if !strings.Contains(stderr.String(), "Usage: remote-viewer") {
+	if !strings.Contains(stderr.String(), "Usage: spice-viewer") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 }

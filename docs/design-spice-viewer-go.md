@@ -89,7 +89,7 @@ Milestone 0 decision memo **must cite specific upstream file paths and commit SH
 ```mermaid
 flowchart TB
   subgraph surfaces [Surfaces]
-    CLI[cmd/remote-viewer single binary]
+    CLI[cmd/spice-viewer single binary]
     LIBAPI[Library consumers]
   end
 
@@ -164,7 +164,7 @@ flowchart TB
 ├── README.md
 ├── LICENSE
 ├── cmd/
-│   └── remote-viewer/          # Single v0.1 binary: GUI by default; --headless for tests
+│   └── spice-viewer/          # Single v0.1 binary: GUI by default; --headless for tests
 ├── internal/
 │   ├── connector/              # Dialer: TCP, TLS, HTTP CONNECT
 │   ├── protocol/               # REDQ framing, link messages, enums, caps bits
@@ -223,7 +223,7 @@ flowchart TB
 
 | From | May import |
 |------|------------|
-| `cmd/remote-viewer` | `pkg/*`, `internal/ui`, `internal/ux` only (not `internal/vv`, `internal/protocol`, …) |
+| `cmd/spice-viewer` | `pkg/*`, `internal/ui`, `internal/ux` only (not `internal/vv`, `internal/protocol`, …) |
 | `pkg/spice` | `internal/*` as needed (library root) |
 | `pkg/vvfile` | stdlib + minimal helpers; no UI |
 | `internal/protocol`, `connector`, `codec`, `session`, `channel` | **no** Fyne/Gio/UI imports |
@@ -280,7 +280,7 @@ toggle-fullscreen=Shift+F11
 2. If `delete-this-file=1` **and** `ParseOptions.DeleteIfRequested == true`:
    - Call `os.Remove(path)` **immediately**, **before** dial/CONNECT, independent of later session success.
    - Rationale: minimize on-disk ticket lifetime; user must re-download Console file after any failure (same as re-open after expiry).
-3. **Go zero-value semantics**: `ParseOptions{}` has `DeleteIfRequested == false`, so library callers who pass zero options **do not delete** (safe library default—callers must opt in). `cmd/remote-viewer` **always** sets `DeleteIfRequested: true` so virt-viewer semantics apply for the product binary. Deletion may be skipped only via an explicit future CLI flag (e.g. `--keep-vv`); no such flag in Phase 1.
+3. **Go zero-value semantics**: `ParseOptions{}` has `DeleteIfRequested == false`, so library callers who pass zero options **do not delete** (safe library default—callers must opt in). `cmd/spice-viewer` **always** sets `DeleteIfRequested: true` so virt-viewer semantics apply for the product binary. Deletion may be skipped only via an explicit future CLI flag (e.g. `--keep-vv`); no such flag in Phase 1.
 4. If remove fails: **warn** user (stderr + GUI toast); do **not** fail the session. Retry once after 100ms on Windows (browser file lock). virt-viewer fails silently; we warn (better security UX).
 5. Tests: “delete even if CONNECT fails” (CLI options); “zero-value ParseOptions does not delete”; “warn path when remove denied”.
 
@@ -288,7 +288,7 @@ toggle-fullscreen=Shift+F11
 
 ```mermaid
 sequenceDiagram
-  participant UI as remote-viewer
+  participant UI as spice-viewer
   participant VV as pkg/vvfile
   participant S as session.Session
   participant D as connector
@@ -775,8 +775,8 @@ type InputDriver interface {
 
 ### Product binary naming
 
-- **v0.1 single binary name: `remote-viewer`** (path `cmd/remote-viewer`).
-- Do **not** ship a second `virt-viewer` binary in v0.1 (avoids dual entrypoints and reduces trademark clash with upstream Red Hat/spice-space **virt-viewer** package). Document that our project/module name may differ from the CLI command; final product trademark/naming is an open legal question—use a distinct project name in README if required (e.g. module `…/spiceview`, CLI still `remote-viewer` for muscle memory).
+- **product binary name: `spice-viewer`**  (path `cmd/spice-viewer`).
+- Do **not** ship a second `virt-viewer` binary in v0.1 (avoids dual entrypoints and reduces trademark clash with upstream Red Hat/spice-space **virt-viewer** package). Document that our project/module name may differ from the CLI command; final product trademark/naming is an open legal question—use a distinct project name in README if required (e.g. module `…/spiceview`, CLI `spice-viewer`).
 - GUI is default when display available; `--headless` uses null driver for CI.
 
 ### Public Go APIs
@@ -843,7 +843,7 @@ type ParseOptions struct {
     // DeleteIfRequested: when true, honor delete-this-file=1 after secrets
     // are copied, before return from ParseFile.
     // Zero value is false: library callers do NOT delete unless they opt in.
-    // cmd/remote-viewer always passes true (virt-viewer product semantics).
+    // cmd/spice-viewer always passes true (virt-viewer product semantics).
     DeleteIfRequested bool
     // Max* limits — see Security parser limits; defaults applied if zero.
 }
@@ -855,7 +855,7 @@ func ParseFile(path string, opt ParseOptions) (*Config, error)
 ### CLI / GUI surface
 
 ```text
-remote-viewer [options] <file.vv | spice://host:port>
+spice-viewer [options] <file.vv | spice://host:port>
 
   --full-screen
   --title override
@@ -1067,7 +1067,7 @@ Agent/MIME (4), media (5), GLZ/USB license-gated (6).
 
 ### Definition of done (global Phase 1)
 
-- [ ] `remote-viewer pve-spice.vv` works against Proxmox VE (display + inputs).
+- [ ] `spice-viewer pve-spice.vv` works against Proxmox VE (display + inputs).
 - [ ] CONNECT authority + TLS subject + ticket documented and tested.
 - [ ] Multi-channel: MAIN_INIT session_id used for children; ticket re-encrypted per channel.
 - [ ] Cursor best-effort; desktop usable without cursor channel.
@@ -1126,7 +1126,7 @@ Same `.vv` with system remote-viewer as control.
 
 ### Phase 1 — Proxmox MVP (v0.1)
 
-**Includes**: vv matrix, early delete, CONNECT opaque host, TLS chain+DN, OAEP ticket, multi-channel MAIN_INIT/list, display raw+LZ, inputs, cursor best-effort, Fyne UI, single `remote-viewer` binary, ux errors, no agent, no auto-reconnect.
+**Includes**: vv matrix, early delete, CONNECT opaque host, TLS chain+DN, OAEP ticket, multi-channel MAIN_INIT/list, display raw+LZ, inputs, cursor best-effort, Fyne UI, single `spice-viewer` binary, ux errors, no agent, no auto-reconnect.
 
 **Acceptance**
 
@@ -1180,7 +1180,7 @@ GLZ/H.264/USB/WebDAV behind tags + license; documented gaps vs spice-gtk.
 4. Proxmox API login in-app to refresh spiceconfig without browser? (Post-v0.1)
 5. Multi-monitor priority?
 6. Upstream contribution vs independent from Shells-com/spice?
-7. Final product trademark name vs CLI `remote-viewer`?
+7. Final product trademark name vs CLI `spice-viewer`?
 
 ---
 
@@ -1208,7 +1208,7 @@ GLZ/H.264/USB/WebDAV behind tags + license; documented gaps vs spice-gtk.
 | secure-attention | Hotkey binding → inject Ctrl+Alt+Del | Match virt-viewer semantics |
 | delete-this-file | After secret copy, **before dial**; warn on failure | Minimize disk exposure |
 | Agent | Off in Phase 1 | Reduce attack surface and scope |
-| Binary name v0.1 | Single `remote-viewer` | Avoid dual entrypoints / trademark tangle |
+| Binary name | Single `spice-viewer`| Single `remote-viewer` | Avoid dual entrypoints / trademark tangle |
 | Versioning | v0.x until Proxmox MVP | API flexibility |
 | Estimates | ±50%; M0 mandatory | Greenfield SPICE is slip-prone |
 
@@ -1335,9 +1335,9 @@ Independently reviewable PRs. **v0.1 cut line after PR 16** (Phase-1 complete). 
 - **Acceptance**: FromVV mapping tests; Connect copies password; Close wipes
 - **Description**: Stable library entry.
 
-### PR 13 — CLI remote-viewer (headless OK)
-- **Title**: `feat(cmd): remote-viewer CLI open .vv (headless/null driver)`
-- **Files**: `cmd/remote-viewer/`, uses `pkg/vvfile` + `pkg/spice` + `internal/ux`
+### PR 13 — CLI spice-viewer (headless OK)
+- **Title**: `feat(cmd): spice-viewer CLI open .vv (headless/null driver)`
+- **Files**: `cmd/spice-viewer/`, uses `pkg/vvfile` + `pkg/spice` + `internal/ux`
 - **Depends on**: PR 12, PR 05
 - **Effort**: 1–2d
 - **Acceptance**: opens fixture against QEMU headless; delete-this-file default on

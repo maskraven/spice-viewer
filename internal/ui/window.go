@@ -61,7 +61,7 @@ type sessionUI struct {
 
 func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, startFullscreen bool, profile spice.PerformanceProfile) *sessionUI {
 	if title == "" {
-		title = "remote-viewer"
+		title = "spice-viewer"
 	}
 	view := newGuestView(surface)
 	win := a.NewWindow(title)

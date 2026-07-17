@@ -1,7 +1,7 @@
 // Copyright 2026 The virt-viewer authors.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package ui is the Fyne GUI surface for remote-viewer.
+// Package ui is the Fyne GUI surface for spice-viewer.
 //
 // It implements spice.DisplayDriver (Present / desktop size / invalidate),
 // keyboard/mouse grab, virt-viewer hotkeys, and daily-use controls:
@@ -19,5 +19,5 @@
 //   - release-cursor → ungrab; toggle-fullscreen → window fullscreen
 //
 // Import rules: may import pkg/spice, pkg/vvfile, and internal/ux.
-// cmd/remote-viewer may import this package.
+// cmd/spice-viewer may import this package.
 package ui

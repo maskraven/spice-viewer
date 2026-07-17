@@ -2,7 +2,7 @@
 # check_imports.sh — enforce package import boundaries for virt-viewer.
 #
 # Rules (from docs/design-spice-viewer-go.md, hardened for CI):
-#   cmd/remote-viewer  → pkg/*, internal/ui, internal/ux only
+#   cmd/spice-viewer  → pkg/*, internal/ui, internal/ux only
 #   pkg/spice          → may import internal/* except UI / GUI toolkits
 #   pkg/vvfile         → stdlib only (no internal/, no UI)
 #   Non-UI packages    → no internal/ui and no GUI toolkits
@@ -63,8 +63,8 @@ is_ui_import() {
   return 1
 }
 
-# --- cmd/remote-viewer: only pkg/*, internal/ui, internal/ux ---
-echo "==> checking cmd/remote-viewer imports"
+# --- cmd/spice-viewer: only pkg/*, internal/ui, internal/ux ---
+echo "==> checking cmd/spice-viewer imports"
 load_imports _imps ./cmd/...
 while IFS= read -r imp; do
   [ -z "$imp" ] && continue
@@ -75,7 +75,7 @@ while IFS= read -r imp; do
       continue
       ;;
     "${MODULE}/"*)
-      echo "FAIL: cmd/remote-viewer must not import $imp (only pkg/*, internal/ui, internal/ux)"
+      echo "FAIL: cmd/spice-viewer must not import $imp (only pkg/*, internal/ui, internal/ux)"
       failed=1
       ;;
   esac

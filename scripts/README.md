@@ -23,7 +23,7 @@ Product packaging details: [packaging/README.md](../packaging/README.md).
 # Start cleartext password SPICE on 127.0.0.1:5900 (default password testpass)
 ./scripts/interop_qemu.sh
 
-# Print / write a sample .vv for remote-viewer or tests
+# Print / write a sample .vv for spice-viewer or tests
 ./scripts/interop_qemu.sh --print-vv
 ./scripts/interop_qemu.sh --write-vv /tmp/lab.vv
 

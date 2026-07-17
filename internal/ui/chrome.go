@@ -670,7 +670,7 @@ func (ui *sessionUI) showChromeMoreMenu(anchor fyne.CanvasObject) {
 		fyne.NewMenuItem("Keyboard shortcuts", func() {
 			ui.showKeyboardShortcuts()
 		}),
-		fyne.NewMenuItem("About remote-viewer", func() {
+		fyne.NewMenuItem("About spice-viewer", func() {
 			ui.showAbout()
 		}),
 		fyne.NewMenuItemSeparator(),

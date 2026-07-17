@@ -7,13 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Product rename**: CLI and packages are now **`spice-viewer`** (was `remote-viewer`).
+  Paths: `cmd/spice-viewer`, desktop/MIME/icons, macOS **SPICE Viewer.app**, Windows setup.
+  Go module path remains `github.com/maskraven/virt-viewer` for import stability.
+
 ### Packaging (all platforms)
 
 #### Added
 
 - **Linux**: hicolor icons, polished `.desktop` / MIME, nFPM **contents** (deb/rpm) with postinst caches,
   Fyne runtime deps, `ffmpeg` recommend, conflict with distro `virt-viewer`
-- **macOS**: `Remote Viewer.app` + UDZO **`.dmg`** scripts (universal arm64+amd64), `.vv` UTI in Info.plist
+- **macOS**: `SPICE Viewer.app` + UDZO **`.dmg`** scripts (universal arm64+amd64), `.vv` UTI in Info.plist
 - **Windows**: GUI subsystem exe (`-H windowsgui`), zip, NSIS installer (`.vv` ProgID), HKCU associate script
 - **CI**: `.github/workflows/release.yml` native matrix (ubuntu / macos / windows) → draft GitHub Release
 - Docs: [packaging/README.md](packaging/README.md)
@@ -71,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Codecs**: Quic (RGB24/32), JPEG / JPEG-Alpha, MJPEG display streams
 - **Audio**: playback channel best-effort (RAW S16LE PCM → `PlaybackDriver`; default NullPlayback)
 - **UI**: Send Keys menu, Type text…, toolbar CAD/Ungrab/Fullscreen/Paste
-- **Packaging scaffold**: `.goreleaser.yaml`, `packaging/remote-viewer.desktop`, MIME `application/x-virt-viewer`
+- **Packaging scaffold**: `.goreleaser.yaml`, `packaging/spice-viewer.desktop`, MIME `application/x-virt-viewer`
 
 ## [0.1.0] — Phase 1 Proxmox MVP
 
@@ -79,7 +85,7 @@ First cut line for a library-first SPICE client aimed at Proxmox Console `.vv` f
 
 ### Added
 
-- **Product binary** `cmd/remote-viewer`: open a virt-viewer / Proxmox `.vv` file
+- **Product binary** `cmd/spice-viewer`: open a virt-viewer / Proxmox `.vv` file
   - GUI default (Fyne): display present, keyboard grab, hotkeys (secure-attention → guest CAD, release-cursor, toggle-fullscreen)
   - `--headless`: NullDriver session for CI and dogfood
   - Honors `delete-this-file=1` before dial

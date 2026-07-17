@@ -10,7 +10,7 @@ import (
 )
 
 // SendKeyPreset is a named key sequence for the Send Keys menu
-// (remote-viewer / virt-viewer style guest inject without agent).
+// (spice-viewer / virt-viewer style guest inject without agent).
 type SendKeyPreset struct {
 	// Label is the menu item text (e.g. "Ctrl+Alt+Del").
 	Label string

@@ -1,6 +1,6 @@
 # Packaging
 
-Product packaging for **remote-viewer** on Linux, macOS, and Windows.
+Product packaging for **spice-viewer** on Linux, macOS, and Windows.
 
 | Platform | Artifacts | How to build |
 |----------|-----------|--------------|
@@ -24,17 +24,17 @@ Do not treat a pure cross-compile from another OS as a full product binary.
 
 | File | Role |
 |------|------|
-| `remote-viewer.desktop` | FreeDesktop app entry; `MimeType=application/x-virt-viewer` |
-| `remote-viewer.xml` | MIME type for `*.vv` |
-| `icons/hicolor/*/apps/remote-viewer.png` | Theme icons (`Icon=remote-viewer`) |
+| `spice-viewer.desktop` | FreeDesktop app entry; `MimeType=application/x-virt-viewer` |
+| `spice-viewer.xml` | MIME type for `*.vv` |
+| `icons/hicolor/*/apps/spice-viewer.png` | Theme icons (`Icon=spice-viewer`) |
 | `scripts/postinstall.sh` / `postremove.sh` | Update desktop/MIME/icon caches (nFPM) |
 
 ### Manual install (tarball)
 
 ```bash
-sudo install -Dm755 remote-viewer /usr/bin/remote-viewer
-sudo install -Dm644 packaging/remote-viewer.desktop /usr/share/applications/
-sudo install -Dm644 packaging/remote-viewer.xml /usr/share/mime/packages/
+sudo install -Dm755 spice-viewer /usr/bin/spice-viewer
+sudo install -Dm644 packaging/spice-viewer.desktop /usr/share/applications/
+sudo install -Dm644 packaging/spice-viewer.xml /usr/share/mime/packages/
 sudo cp -a packaging/icons/hicolor/* /usr/share/icons/hicolor/
 sudo update-desktop-database
 sudo update-mime-database /usr/share/mime
@@ -44,14 +44,13 @@ gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
 Prefer this client as the default for `.vv`:
 
 ```bash
-xdg-mime default remote-viewer.desktop application/x-virt-viewer
+xdg-mime default spice-viewer.desktop application/x-virt-viewer
 ```
 
 ### deb / rpm
 
-Package name: **`remote-viewer-spice`** (binary still `remote-viewer`).
+Package name and binary: **`spice-viewer`** (no path clash with distro `virt-viewer` / `remote-viewer`).
 
-- Declares a **conflict** with distro package `virt-viewer` (same `/usr/bin/remote-viewer` path).
 - **Recommends** `ffmpeg` for H.264 (soft-skip without it).
 - Runtime deps: OpenGL + X11/Wayland client libraries (see `.goreleaser.yaml` nFPM).
 
@@ -71,7 +70,7 @@ goreleaser release --snapshot --clean
 | `macos/Info.plist.in` | Bundle metadata + **`.vv` UTI** / document type |
 | `macos/AppIcon.icns` | App icon |
 | `macos/entitlements.plist` | Hardened-runtime exceptions (for future notarization) |
-| `scripts/macos/make-app.sh` | Binary → `Remote Viewer.app` |
+| `scripts/macos/make-app.sh` | Binary → `SPICE Viewer.app` |
 | `scripts/macos/make-dmg.sh` | App → UDZO DMG with `/Applications` link |
 | `scripts/macos/build-product.sh` | Universal arm64+amd64 + app + dmg + zip |
 
@@ -80,9 +79,9 @@ goreleaser release --snapshot --clean
 export CGO_ENABLED=1
 export MACOSX_DEPLOYMENT_TARGET=11.0
 VERSION=v0.2.0 ./scripts/macos/build-product.sh
-# → dist/macos/Remote Viewer.app
-# → dist/macos/Remote-Viewer-0.2.0-macos.dmg
-# → dist/macos/Remote-Viewer-0.2.0-macos-app.zip
+# → dist/macos/SPICE Viewer.app
+# → dist/macos/Spice-Viewer-0.2.0-macos.dmg
+# → dist/macos/Spice-Viewer-0.2.0-macos-app.zip
 ```
 
 Unsigned builds work after right-click → Open (or clearing quarantine).  
@@ -104,15 +103,15 @@ Unsigned builds work after right-click → Open (or clearing quarantine).
 # On Windows with Go + MinGW (or MSVC) for cgo:
 $env:CGO_ENABLED = "1"
 .\scripts\windows\build-product.ps1 -Version v0.2.0
-# → dist\windows\remote-viewer.exe   (-H windowsgui, no console flash)
-# → dist\windows\remote-viewer_*_windows_amd64.zip
-# → dist\windows\remote-viewer-setup-*-amd64.exe  (if NSIS installed)
+# → dist\windows\spice-viewer.exe   (-H windowsgui, no console flash)
+# → dist\windows\spice-viewer_*_windows_amd64.zip
+# → dist\windows\spice-viewer-setup-*-amd64.exe  (if NSIS installed)
 ```
 
 Portable association (current user):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File associate-hkcu.ps1 -ExePath .\remote-viewer.exe
+powershell -ExecutionPolicy Bypass -File associate-hkcu.ps1 -ExePath .\spice-viewer.exe
 ```
 
 Unsigned builds may trigger SmartScreen; verify release checksums.

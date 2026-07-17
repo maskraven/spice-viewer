@@ -19,7 +19,7 @@ import (
 // RunGUI installs a Fyne display driver on cfg, connects the SPICE session,
 // and blocks until the window is closed or the session disconnects.
 //
-// Window title comes from cfg.Title (fallback "remote-viewer").
+// Window title comes from cfg.Title (fallback "spice-viewer").
 // Hotkeys use cfg.Hotkeys with virt-viewer defaults when empty.
 // cfg.Fullscreen starts the window fullscreen.
 //
@@ -49,10 +49,10 @@ func RunGUI(ctx context.Context, cfg spice.ConnectConfig) error {
 		}
 	}
 
-	a := app.NewWithID("com.maskraven.remote-viewer")
+	a := app.NewWithID("com.maskraven.spice-viewer")
 	title := cfg.Title
 	if title == "" {
-		title = "remote-viewer"
+		title = "spice-viewer"
 	}
 	ui := newSessionUI(a, surface, bind, title, cfg.Fullscreen, cfg.Profile)
 
@@ -113,7 +113,7 @@ func RunGUI(ctx context.Context, cfg spice.ConnectConfig) error {
 				switch ev.Type {
 				case spice.EventError:
 					if ev.Err != nil {
-						log.Printf("remote-viewer: %v", ev.Err)
+						log.Printf("spice-viewer: %v", ev.Err)
 					}
 				case spice.EventClipboard:
 					text := ev.ClipboardText
@@ -132,7 +132,7 @@ func RunGUI(ctx context.Context, cfg spice.ConnectConfig) error {
 				case spice.EventDisconnected:
 					if ev.Err != nil {
 						setErr(ev.Err)
-						log.Printf("remote-viewer: disconnected: %v", ev.Err)
+						log.Printf("spice-viewer: disconnected: %v", ev.Err)
 					}
 					shutdown()
 					return

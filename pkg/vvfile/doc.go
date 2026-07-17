@@ -1,6 +1,6 @@
 // Package vvfile parses virt-viewer connection files (.vv).
 //
-// This is the only public .vv API. cmd/remote-viewer and internal/ui
+// This is the only public .vv API. cmd/spice-viewer and internal/ui
 // should use this package rather than internal parsers.
 //
 // Parse reads an io.Reader. ParseFile opens a path and, when

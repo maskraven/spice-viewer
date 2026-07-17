@@ -19,12 +19,12 @@ record files; `.gitkeep` keeps the path in git.
    SPICE_RECORD=testdata/records/lab-link.rec ./scripts/interop_qemu.sh
    ```
 
-2. In another terminal, exercise the client (integration tests or remote-viewer):
+2. In another terminal, exercise the client (integration tests or spice-viewer):
 
    ```bash
    ./scripts/run_integration.sh
    # or
-   remote-viewer <( ./scripts/interop_qemu.sh --print-vv )
+   spice-viewer <( ./scripts/interop_qemu.sh --print-vv )
    ```
 
 3. Stop QEMU (Ctrl-C). The record path is set via:

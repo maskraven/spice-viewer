@@ -98,7 +98,7 @@ func (ui *sessionUI) installMenus() {
 		fyne.NewMenuItem("Keyboard shortcuts", func() {
 			ui.showKeyboardShortcuts()
 		}),
-		fyne.NewMenuItem("About remote-viewer", func() {
+		fyne.NewMenuItem("About spice-viewer", func() {
 			ui.showAbout()
 		}),
 	)
@@ -125,7 +125,7 @@ func (ui *sessionUI) showKeyboardShortcuts() {
 
 func (ui *sessionUI) showAbout() {
 	dialog.ShowInformation("About",
-		"remote-viewer — SPICE client (Proxmox-friendly)\n"+
+		"spice-viewer — SPICE client (Proxmox-friendly)\n"+
 			"Library: github.com/maskraven/virt-viewer\n"+
 			"Display, inputs, cursor, audio, Send Keys, hotkeys.\n"+
 			"Controls: top-center auto-hide bar (Pin · CAD · Ungrab · clipboard).\n"+

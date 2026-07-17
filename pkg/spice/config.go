@@ -73,7 +73,7 @@ type ConnectConfig struct {
 	AllowCleartext bool
 	// ShareDir is an optional host directory for the WebDAV share scaffold.
 	// Empty means webdav (when listed) accepts/discards frames only.
-	// CLI: remote-viewer --share-dir=PATH
+	// CLI: spice-viewer --share-dir=PATH
 	ShareDir string
 
 	// Profile maps to SPICE preferred image compression / video codec hints

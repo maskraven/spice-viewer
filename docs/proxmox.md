@@ -1,6 +1,6 @@
-# Proxmox Console (SPICE) with remote-viewer
+# Proxmox Console (SPICE) with spice-viewer
 
-This guide covers opening a Proxmox VE **Console → SPICE** connection file (`.vv`) with this client (`cmd/remote-viewer`), how the CONNECT / TLS / ticket path works, and how to troubleshoot common failures.
+This guide covers opening a Proxmox VE **Console → SPICE** connection file (`.vv`) with this client (`cmd/spice-viewer`), how the CONNECT / TLS / ticket path works, and how to troubleshoot common failures.
 
 See also:
 
@@ -13,19 +13,19 @@ See also:
 2. Build the client (Go 1.22+):
 
    ```bash
-   go build -o remote-viewer ./cmd/remote-viewer
+   go build -o spice-viewer ./cmd/spice-viewer
    ```
 
 3. Open the file (GUI is the default):
 
    ```bash
-   ./remote-viewer ~/Downloads/pve-spice.vv
+   ./spice-viewer ~/Downloads/pve-spice.vv
    ```
 
 4. Headless (no display; NullDriver — CI / dogfood):
 
    ```bash
-   ./remote-viewer --headless /path/to/pve-spice.vv
+   ./spice-viewer --headless /path/to/pve-spice.vv
    ```
 
 **Important:** Proxmox tickets expire quickly (often on the order of tens of seconds for multi-channel open, and minutes for the session). Download the `.vv` and open it immediately. Do not reuse an old connection file.
@@ -107,17 +107,17 @@ Stable user-facing strings live in `internal/ux` and are printed by the CLI (and
 Example CLI output:
 
 ```text
-remote-viewer: Ticket invalid or expired — open Console again in Proxmox
-remote-viewer: detail: …
+spice-viewer: Ticket invalid or expired — open Console again in Proxmox
+spice-viewer: detail: …
 ```
 
-**What to do:** In the Proxmox UI, open **Console → SPICE** again (fresh `.vv`), then run `remote-viewer` on the new file. Do not expect silent reconnect.
+**What to do:** In the Proxmox UI, open **Console → SPICE** again (fresh `.vv`), then run `spice-viewer` on the new file. Do not expect silent reconnect.
 
 ## `delete-this-file` behavior
 
 | Consumer | Honors `delete-this-file=1`? |
 |----------|------------------------------|
-| `cmd/remote-viewer` (GUI and `--headless`) | **Yes** (always) |
+| `cmd/spice-viewer` (GUI and `--headless`) | **Yes** (always) |
 | Library `vvfile.ParseFile` with zero `ParseOptions` | **No** (safe default) |
 | Library with `ParseOptions{DeleteIfRequested: true}` | **Yes** |
 
@@ -150,7 +150,7 @@ Operators on retina / 200% displays should still see a usable desktop; if the im
 
 ### “Cannot reach Proxmox spiceproxy” (`Proxy`)
 
-- Host running `remote-viewer` must reach the `proxy=` URL (often the PVE node on the spiceproxy port, e.g. 3128).
+- Host running `spice-viewer` must reach the `proxy=` URL (often the PVE node on the spiceproxy port, e.g. 3128).
 - Check firewall, VPN, and that spiceproxy is enabled for the cluster/node.
 - HTTPS proxies are not supported in Phase 1 (HTTP CONNECT only).
 
@@ -168,7 +168,7 @@ Operators on retina / 200% displays should still see a usable desktop; if the im
 ### “Ticket invalid or expired” (`Ticket`)
 
 - Most common: waited too long after download, or ticket TTL raced slow multi-channel open.
-- Re-open **Console → SPICE** and launch `remote-viewer` immediately.
+- Re-open **Console → SPICE** and launch `spice-viewer` immediately.
 - Child channel auth failure uses the same message (ticket checked on every channel link).
 
 ### “Connection lost — re-open Console for a new ticket” (`Transport`)
@@ -199,12 +199,12 @@ Use this on a real Proxmox lab. Checkboxes are for the **operator** — do not m
 ### Prerequisites
 
 - [ ] Proxmox VE node reachable; VM powered on with SPICE/QXL display
-- [ ] Built `remote-viewer` from this tree (`go build -o remote-viewer ./cmd/remote-viewer`)
+- [ ] Built `spice-viewer` from this tree (`go build -o spice-viewer ./cmd/spice-viewer`)
 - [ ] Host can reach spiceproxy (`proxy=` in the `.vv`)
 
 ### Session path
 
-- [ ] **Open `.vv`**: Console → SPICE download; `./remote-viewer pve-spice.vv` starts without config error
+- [ ] **Open `.vv`**: Console → SPICE download; `./spice-viewer pve-spice.vv` starts without config error
 - [ ] **Display frames**: guest desktop (or boot console) is visible and updates
 - [ ] **Keyboard**: typing reaches the guest (login prompt or editor)
 - [ ] **Mouse**: pointer motion/clicks reach the guest; grab/ungrab works

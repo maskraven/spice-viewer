@@ -1,5 +1,5 @@
-# Associate *.vv with a portable remote-viewer.exe for the current user (no admin).
-# Usage: powershell -ExecutionPolicy Bypass -File associate-hkcu.ps1 -ExePath C:\path\remote-viewer.exe
+# Associate *.vv with a portable spice-viewer.exe for the current user (no admin).
+# Usage: powershell -ExecutionPolicy Bypass -File associate-hkcu.ps1 -ExePath C:\path\spice-viewer.exe
 param(
     [Parameter(Mandatory = $true)]
     [string]$ExePath
@@ -7,7 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $exe = (Resolve-Path $ExePath).Path
-$progId = "remote-viewer.vv"
+$progId = "spice-viewer.vv"
 $mime = "application/x-virt-viewer"
 
 New-Item -Path "HKCU:\Software\Classes\.vv" -Force | Out-Null

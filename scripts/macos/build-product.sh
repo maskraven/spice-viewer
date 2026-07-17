@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build universal (arm64+amd64) remote-viewer, then .app and .dmg.
+# Build universal (arm64+amd64) spice-viewer, then .app and .dmg.
 # Must run on macOS with Xcode CLT. CGO required (Fyne + VideoToolbox).
 # Usage: VERSION=0.2.0 ./scripts/macos/build-product.sh
 set -euo pipefail
@@ -17,26 +17,26 @@ LDFLAGS="-s -w -X main.Version=${VERSION}"
 
 echo "==> building darwin/arm64"
 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" \
-	-o "$DIST/remote-viewer-arm64" ./cmd/remote-viewer
+	-o "$DIST/spice-viewer-arm64" ./cmd/spice-viewer
 
 echo "==> building darwin/amd64"
 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" \
-	-o "$DIST/remote-viewer-amd64" ./cmd/remote-viewer
+	-o "$DIST/spice-viewer-amd64" ./cmd/spice-viewer
 
 echo "==> lipo universal"
-lipo -create -output "$DIST/remote-viewer" \
-	"$DIST/remote-viewer-arm64" "$DIST/remote-viewer-amd64"
-lipo -info "$DIST/remote-viewer"
+lipo -create -output "$DIST/spice-viewer" \
+	"$DIST/spice-viewer-arm64" "$DIST/spice-viewer-amd64"
+lipo -info "$DIST/spice-viewer"
 
-VERSION="$VERSION" "$ROOT/scripts/macos/make-app.sh" "$DIST/remote-viewer" "$DIST"
-VERSION="$VERSION" "$ROOT/scripts/macos/make-dmg.sh" "$DIST/Remote Viewer.app" \
-	"$DIST/Remote-Viewer-${VERSION#v}-macos.dmg"
+VERSION="$VERSION" "$ROOT/scripts/macos/make-app.sh" "$DIST/spice-viewer" "$DIST"
+VERSION="$VERSION" "$ROOT/scripts/macos/make-dmg.sh" "$DIST/SPICE Viewer.app" \
+	"$DIST/Spice-Viewer-${VERSION#v}-macos.dmg"
 
 # Also ship a zip of the .app for users who prefer not to open a DMG.
 (
 	cd "$DIST"
-	rm -f "Remote-Viewer-${VERSION#v}-macos-app.zip"
-	zip -qry "Remote-Viewer-${VERSION#v}-macos-app.zip" "Remote Viewer.app"
+	rm -f "Spice-Viewer-${VERSION#v}-macos-app.zip"
+	zip -qry "Spice-Viewer-${VERSION#v}-macos-app.zip" "SPICE Viewer.app"
 )
 
 echo "macOS product artifacts in $DIST"

@@ -9,7 +9,7 @@
   "RT_MANIFEST": {
     "#1": {
       "identity": {
-        "name": "remote-viewer",
+        "name": "spice-viewer",
         "version": "0.0.0.0"
       },
       "description": "SPICE remote display client",
@@ -27,11 +27,11 @@
       },
       "info": {
         "0409": {
-          "ProductName": "remote-viewer",
+          "ProductName": "spice-viewer",
           "FileDescription": "SPICE remote viewer (Proxmox / virt-viewer .vv)",
           "CompanyName": "virt-viewer authors",
           "LegalCopyright": "Copyright 2026 The virt-viewer authors. Apache-2.0",
-          "OriginalFilename": "remote-viewer.exe",
+          "OriginalFilename": "spice-viewer.exe",
           "ProductVersion": "0.0.0.0",
           "FileVersion": "0.0.0.0"
         }

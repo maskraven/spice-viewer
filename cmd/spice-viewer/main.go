@@ -1,7 +1,7 @@
 // Copyright 2026 The virt-viewer authors.
 // SPDX-License-Identifier: Apache-2.0
 
-// Command remote-viewer is the virt-viewer product binary.
+// Command spice-viewer is the SPICE Viewer product binary.
 //
 // It opens a Proxmox/virt-viewer .vv connection file, establishes a SPICE
 // session via pkg/spice, and presents either a Fyne GUI (default) or a
@@ -58,14 +58,14 @@ type options struct {
 // On help (-h / -help), returns err == flag.ErrHelp.
 func parseArgs(args []string, stderr io.Writer) (options, error) {
 	var opts options
-	fs := flag.NewFlagSet("remote-viewer", flag.ContinueOnError)
+	fs := flag.NewFlagSet("spice-viewer", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.BoolVar(&opts.version, "version", false, "print version and exit")
 	fs.BoolVar(&opts.headless, "headless", false, "run without GUI (NullDriver; for CI and dogfood)")
 	fs.StringVar(&opts.shareDir, "share-dir", "", "optional host directory for WebDAV share scaffold (best-effort)")
 	fs.StringVar(&opts.profile, "profile", "default", "display performance profile: default|lan|wan|quality (preferred compression hint)")
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: remote-viewer [flags] <file.vv>\n\n")
+		fmt.Fprintf(stderr, "Usage: spice-viewer [flags] <file.vv>\n\n")
 		fmt.Fprintf(stderr, "Open a virt-viewer / Proxmox SPICE connection file and establish a session.\n\n")
 		fmt.Fprintf(stderr, "GUI is the default. Use --headless for NullDriver (CI / no display).\n")
 		fmt.Fprintf(stderr, "By default the connection file is deleted after parse when it sets\n")
@@ -73,11 +73,11 @@ func parseArgs(args []string, stderr io.Writer) (options, error) {
 		fmt.Fprintf(stderr, "Flags:\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(stderr, "\nExamples:\n")
-		fmt.Fprintf(stderr, "  remote-viewer pve-spice.vv\n")
-		fmt.Fprintf(stderr, "  remote-viewer --profile=wan pve-spice.vv\n")
-		fmt.Fprintf(stderr, "  remote-viewer --headless pve-spice.vv\n")
-		fmt.Fprintf(stderr, "  remote-viewer --share-dir=$HOME/Public pve-spice.vv\n")
-		fmt.Fprintf(stderr, "  remote-viewer -version\n")
+		fmt.Fprintf(stderr, "  spice-viewer pve-spice.vv\n")
+		fmt.Fprintf(stderr, "  spice-viewer --profile=wan pve-spice.vv\n")
+		fmt.Fprintf(stderr, "  spice-viewer --headless pve-spice.vv\n")
+		fmt.Fprintf(stderr, "  spice-viewer --share-dir=$HOME/Public pve-spice.vv\n")
+		fmt.Fprintf(stderr, "  spice-viewer -version\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return opts, err
@@ -99,7 +99,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "remote-viewer: %v\n", err)
+		fmt.Fprintf(stderr, "spice-viewer: %v\n", err)
 		return exitUsage
 	}
 
@@ -119,7 +119,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	prof, err := spice.ParsePerformanceProfile(opts.profile)
 	if err != nil {
-		fmt.Fprintf(stderr, "remote-viewer: %v\n", err)
+		fmt.Fprintf(stderr, "spice-viewer: %v\n", err)
 		return exitUsage
 	}
 
@@ -134,9 +134,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if msg == "" {
 			msg = runErr.Error()
 		}
-		fmt.Fprintf(stderr, "remote-viewer: %s\n", msg)
+		fmt.Fprintf(stderr, "spice-viewer: %s\n", msg)
 		if e := ux.Classify(runErr); e != nil && e.Err != nil {
-			fmt.Fprintf(stderr, "remote-viewer: detail: %v\n", e.Err)
+			fmt.Fprintf(stderr, "spice-viewer: detail: %v\n", e.Err)
 		}
 		return exitFail
 	}
@@ -153,7 +153,7 @@ func runGUI(ctx context.Context, path, shareDir string, profile spice.Performanc
 	defer wipeBytes(f.CA)
 
 	if f.DeleteErr != nil {
-		fmt.Fprintf(stderr, "remote-viewer: warning: could not delete connection file: %v\n", f.DeleteErr)
+		fmt.Fprintf(stderr, "spice-viewer: warning: could not delete connection file: %v\n", f.DeleteErr)
 	}
 
 	cfg, err := spice.ConnectConfigFromVV(f)
@@ -165,11 +165,11 @@ func runGUI(ctx context.Context, path, shareDir string, profile spice.Performanc
 
 	// Title fallback for empty .vv title.
 	if cfg.Title == "" {
-		cfg.Title = "remote-viewer"
+		cfg.Title = "spice-viewer"
 	}
 
 	if title := cfg.Title; title != "" {
-		fmt.Fprintf(stdout, "remote-viewer: opening GUI session (%s, profile=%s)\n", title, profile.String())
+		fmt.Fprintf(stdout, "spice-viewer: opening GUI session (%s, profile=%s)\n", title, profile.String())
 	}
 
 	err = ui.RunGUI(ctx, cfg)
@@ -198,7 +198,7 @@ func runHeadless(ctx context.Context, path, shareDir string, profile spice.Perfo
 	defer wipeBytes(f.CA)
 
 	if f.DeleteErr != nil {
-		fmt.Fprintf(stderr, "remote-viewer: warning: could not delete connection file: %v\n", f.DeleteErr)
+		fmt.Fprintf(stderr, "spice-viewer: warning: could not delete connection file: %v\n", f.DeleteErr)
 	}
 
 	cfg, err := spice.ConnectConfigFromVV(f)
@@ -227,9 +227,9 @@ func runHeadless(ctx context.Context, path, shareDir string, profile spice.Perfo
 	defer func() { _ = client.Close() }()
 
 	if title := client.Title(); title != "" {
-		fmt.Fprintf(stdout, "remote-viewer: connected (%s)\n", title)
+		fmt.Fprintf(stdout, "spice-viewer: connected (%s)\n", title)
 	} else {
-		fmt.Fprintf(stdout, "remote-viewer: connected\n")
+		fmt.Fprintf(stdout, "spice-viewer: connected\n")
 	}
 
 	// Wait drains Events until disconnect or ctx cancel.
