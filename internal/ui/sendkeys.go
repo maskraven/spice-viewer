@@ -147,12 +147,17 @@ func TypeTextBestEffort(inj KeyInjector, s string) (typed int, err error) {
 	return typed, nil
 }
 
-// foldClipboardText normalizes host clipboard text for US keystroke paste
-// (macOS often provides curly quotes / NBSP that are not on a US map).
+// foldClipboardText normalizes host clipboard / Type-dialog text for US
+// keystroke paste (macOS curly quotes, NBSP, and all newline forms → Enter).
 func foldClipboardText(s string) string {
 	if s == "" {
 		return s
 	}
+	// Preserve line breaks: CRLF and lone CR both become LF (Enter scancode).
+	// Do not drop CR — that discarded newlines when the widget used \r only.
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
@@ -167,8 +172,8 @@ func foldClipboardText(s string) string {
 			b.WriteByte(' ')
 		case '\u2026': // …
 			b.WriteString("...")
-		case '\r':
-			// drop CR in CRLF; LF handled as Enter
+		case '\u2028', '\u2029', '\u0085': // LS / PS / NEL → Enter
+			b.WriteByte('\n')
 		case '\u200b', '\u200c', '\u200d', '\ufeff': // zero-width / BOM
 			// skip
 		default:

@@ -116,6 +116,27 @@ func TestTypeText_EmptyOK(t *testing.T) {
 	}
 }
 
+func TestTypeText_Newlines(t *testing.T) {
+	// LF, CRLF, and CR-only must each inject Enter between a and b.
+	for _, s := range []string{"a\nb", "a\r\nb", "a\rb"} {
+		f := &fakeInputs{}
+		if err := TypeText(f, s); err != nil {
+			t.Fatalf("%q: %v", s, err)
+		}
+		// a, Enter, b
+		want := []uint16{letterScancode('a'), scanEnter, letterScancode('b')}
+		if !uint16SliceEq(f.downs, want) {
+			t.Fatalf("%q downs = %v want %v", s, f.downs, want)
+		}
+	}
+}
+
+func TestFoldClipboardText_Newlines(t *testing.T) {
+	if got := foldClipboardText("a\r\nb\rc"); got != "a\nb\nc" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestInjectCAD_UsesSequence(t *testing.T) {
 	f := &fakeInputs{}
 	if err := InjectCAD(f); err != nil {
