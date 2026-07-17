@@ -5,11 +5,15 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"log"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/maskraven/virt-viewer/pkg/spice"
@@ -253,35 +257,75 @@ func (ui *sessionUI) showTypeTextDialog() {
 		dialog.ShowError(fmt.Errorf("not connected"), ui.win)
 		return
 	}
+	if ui.win == nil {
+		return
+	}
+	// Custom dark panel (not dialog.NewForm): dismiss on outside click,
+	// matches Keys list styling (no white board, white text).
 	entry := widget.NewMultiLineEntry()
-	entry.SetPlaceHolder("Text is typed into the guest as keystrokes (US QWERTY).\nUse for short passwords/commands when clipboard is unavailable.")
+	entry.SetPlaceHolder("US QWERTY keystrokes into the guest…")
 	entry.Wrapping = fyne.TextWrapWord
-	form := dialog.NewForm(
-		"Type text into guest",
-		"Type",
-		"Cancel",
-		[]*widget.FormItem{
-			widget.NewFormItem("Text", entry),
-		},
-		func(ok bool) {
-			if !ok {
-				return
-			}
-			text := entry.Text
-			if text == "" {
-				return
-			}
-			if err := TypeText(ui.inputs, text); err != nil {
-				log.Printf("ui: type text: %v", err)
-				dialog.ShowError(err, ui.win)
-				return
-			}
-			ui.setStatus(fmt.Sprintf("Typed %d characters", len([]rune(text))))
-		},
-		ui.win,
+	entry.SetMinRowsVisible(6)
+
+	title := widget.NewLabel("Type text into guest")
+	title.TextStyle = fyne.TextStyle{Bold: true}
+
+	var closeDlg func()
+	doType := func() {
+		text := entry.Text
+		closeDlg()
+		if text == "" {
+			return
+		}
+		if err := TypeText(ui.inputs, text); err != nil {
+			log.Printf("ui: type text: %v", err)
+			dialog.ShowError(err, ui.win)
+			return
+		}
+		ui.setStatus(fmt.Sprintf("Typed %d characters", len([]rune(text))))
+	}
+	typeBtn := widget.NewButton("Type", doType)
+	typeBtn.Importance = widget.HighImportance
+	cancelBtn := widget.NewButton("Cancel", func() { closeDlg() })
+	cancelBtn.Importance = widget.MediumImportance
+	buttons := container.NewHBox(cancelBtn, typeBtn)
+
+	inner := container.NewBorder(
+		title,
+		buttons,
+		nil, nil,
+		entry,
 	)
-	form.Resize(fyne.NewSize(480, 280))
-	form.Show()
+	bg := canvas.NewRectangle(color.NRGBA{R: 32, G: 32, B: 36, A: 255})
+	bg.CornerRadius = 8
+	bg.StrokeColor = color.NRGBA{R: 55, G: 58, B: 66, A: 255}
+	bg.StrokeWidth = 1
+	card := container.NewStack(bg, container.NewPadded(inner))
+	card.Resize(fyne.NewSize(480, 280))
+
+	// Center on canvas.
+	cs := ui.win.Canvas().Size()
+	pos := fyne.NewPos((cs.Width-480)/2, (cs.Height-280)/2)
+	if pos.X < 8 {
+		pos.X = 8
+	}
+	if pos.Y < 8 {
+		pos.Y = 8
+	}
+
+	th := darkPanelTheme{Theme: theme.Current()}
+	themed := container.NewThemeOverride(card, th)
+	// Force fixed size for the overlay panel.
+	wrap := container.NewStack(themed)
+	wrap.Resize(fyne.NewSize(480, 280))
+
+	ui.showDarkPanelOverlay(wrap, pos)
+	// Override dismiss already closes darkOverlay; closeDlg just hides overlay.
+	closeDlg = func() {
+		ui.closeDarkOverlay()
+	}
+	// Focus entry for immediate typing.
+	ui.win.Canvas().Focus(entry)
 }
 
 const statusActionHold = 4 * time.Second

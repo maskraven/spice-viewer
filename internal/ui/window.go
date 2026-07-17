@@ -32,6 +32,8 @@ type sessionUI struct {
 	client *spice.Client
 	inputs *spice.Inputs
 	chrome *controlChrome
+	// darkOverlay is the current Keys/Type dark panel (nil when closed).
+	darkOverlay *darkOverlay
 	// statusStrip is the bottom compact bar; hidden in fullscreen.
 	statusStrip *statusBar
 

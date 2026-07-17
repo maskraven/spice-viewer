@@ -255,12 +255,12 @@ func (ui *sessionUI) installChrome() fyne.CanvasObject {
 	return overlay
 }
 
-// keysMenuTheme shrinks Keys popup text/padding (PopUpMenu uses default theme size).
-type keysMenuTheme struct {
+// darkPanelTheme: compact dark menus (Keys list, Type dialog) — white text, no light chrome.
+type darkPanelTheme struct {
 	fyne.Theme
 }
 
-func (t keysMenuTheme) Size(n fyne.ThemeSizeName) float32 {
+func (t darkPanelTheme) Size(n fyne.ThemeSizeName) float32 {
 	switch n {
 	case theme.SizeNameText, theme.SizeNameCaptionText, theme.SizeNameHeadingText:
 		return 11
@@ -270,8 +270,237 @@ func (t keysMenuTheme) Size(n fyne.ThemeSizeName) float32 {
 		return 3
 	case theme.SizeNameScrollBar:
 		return 8
+	case theme.SizeNameInputBorder, theme.SizeNameSeparatorThickness:
+		return 0 // no light hairline borders on dark panels
 	default:
 		return t.Theme.Size(n)
+	}
+}
+
+func (t darkPanelTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+	// Solid dark surfaces so Fyne PopUp overlay chrome is not a white board.
+	dark := color.NRGBA{R: 32, G: 32, B: 36, A: 255}
+	switch n {
+	case theme.ColorNameForeground, theme.ColorNamePrimary,
+		theme.ColorNamePlaceHolder, theme.ColorNameHyperlink,
+		theme.ColorNameHeaderBackground:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	case theme.ColorNameDisabled:
+		return color.NRGBA{R: 200, G: 200, B: 210, A: 255}
+	case theme.ColorNameBackground, theme.ColorNameOverlayBackground,
+		theme.ColorNameMenuBackground, theme.ColorNameInputBackground,
+		theme.ColorNameButton, theme.ColorNameDisabledButton:
+		return dark
+	case theme.ColorNameHover:
+		return color.NRGBA{R: 55, G: 58, B: 68, A: 255}
+	case theme.ColorNamePressed, theme.ColorNameSelection, theme.ColorNameFocus:
+		return color.NRGBA{R: 45, G: 48, B: 58, A: 255}
+	case theme.ColorNameSeparator, theme.ColorNameInputBorder, theme.ColorNameShadow:
+		// Match panel — avoids white/light edges around the popup.
+		return dark
+	case theme.ColorNameScrollBar:
+		return color.NRGBA{R: 80, G: 82, B: 90, A: 255}
+	default:
+		return t.Theme.Color(n, v)
+	}
+}
+
+// darkOverlay is a full-canvas overlay: tap outside panel dismisses; no light border.
+type darkOverlay struct {
+	widget.BaseWidget
+	canvas    fyne.Canvas
+	panel     fyne.CanvasObject
+	panelPos  fyne.Position
+	panelSize fyne.Size
+	onDismiss func()
+	shown     bool
+}
+
+func (d *darkOverlay) Show() {
+	if d.canvas == nil || d.shown {
+		return
+	}
+	d.canvas.Overlays().Add(d)
+	d.shown = true
+	d.BaseWidget.Show()
+	d.Refresh()
+}
+
+func (d *darkOverlay) Hide() {
+	if d.shown && d.canvas != nil {
+		d.canvas.Overlays().Remove(d)
+		d.shown = false
+	}
+	d.BaseWidget.Hide()
+	if d.onDismiss != nil {
+		// Clear before call so re-entrant Hide is safe.
+		fn := d.onDismiss
+		d.onDismiss = nil
+		fn()
+	}
+}
+
+func (d *darkOverlay) Tapped(e *fyne.PointEvent) {
+	if e == nil {
+		return
+	}
+	// Dismiss when tapping outside the panel.
+	p, s := d.panelPos, d.panelSize
+	if e.Position.X < p.X || e.Position.Y < p.Y ||
+		e.Position.X > p.X+s.Width || e.Position.Y > p.Y+s.Height {
+		d.Hide()
+	}
+}
+
+func (d *darkOverlay) TappedSecondary(e *fyne.PointEvent) {
+	d.Tapped(e)
+}
+
+// dismissLayer fills the canvas and forwards taps to the overlay for outside dismiss.
+type dismissLayer struct {
+	widget.BaseWidget
+	ov *darkOverlay
+}
+
+func (l *dismissLayer) Tapped(e *fyne.PointEvent) {
+	if l.ov != nil {
+		l.ov.Tapped(e)
+	}
+}
+func (l *dismissLayer) TappedSecondary(e *fyne.PointEvent) {
+	if l.ov != nil {
+		l.ov.TappedSecondary(e)
+	}
+}
+func (l *dismissLayer) CreateRenderer() fyne.WidgetRenderer {
+	l.ExtendBaseWidget(l)
+	// Nearly invisible fill — must be non-zero alpha so the layer participates in hit testing.
+	r := canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 8})
+	return widget.NewSimpleRenderer(r)
+}
+
+func (d *darkOverlay) CreateRenderer() fyne.WidgetRenderer {
+	d.ExtendBaseWidget(d)
+	layer := &dismissLayer{ov: d}
+	layer.ExtendBaseWidget(layer)
+	return &darkOverlayRenderer{d: d, layer: layer, objects: []fyne.CanvasObject{layer, d.panel}}
+}
+
+type darkOverlayRenderer struct {
+	d       *darkOverlay
+	layer   *dismissLayer
+	objects []fyne.CanvasObject
+}
+
+func (r *darkOverlayRenderer) Destroy() {}
+func (r *darkOverlayRenderer) Objects() []fyne.CanvasObject { return r.objects }
+func (r *darkOverlayRenderer) MinSize() fyne.Size {
+	if r.d.canvas != nil {
+		return r.d.canvas.Size()
+	}
+	return fyne.NewSize(1, 1)
+}
+func (r *darkOverlayRenderer) Layout(size fyne.Size) {
+	if r.layer != nil {
+		r.layer.Resize(size)
+		r.layer.Move(fyne.NewPos(0, 0))
+	}
+	// Keep panel at requested size/pos (clamp into canvas).
+	ps := r.d.panel.MinSize()
+	if r.d.panelSize.Width > ps.Width {
+		ps.Width = r.d.panelSize.Width
+	}
+	if r.d.panelSize.Height > ps.Height {
+		ps.Height = r.d.panelSize.Height
+	}
+	pos := r.d.panelPos
+	if pos.X+ps.Width > size.Width {
+		pos.X = size.Width - ps.Width
+	}
+	if pos.Y+ps.Height > size.Height {
+		pos.Y = size.Height - ps.Height
+	}
+	if pos.X < 0 {
+		pos.X = 0
+	}
+	if pos.Y < 0 {
+		pos.Y = 0
+	}
+	r.d.panelPos = pos
+	r.d.panelSize = ps
+	r.d.panel.Resize(ps)
+	r.d.panel.Move(pos)
+}
+func (r *darkOverlayRenderer) Refresh() {
+	if r.layer != nil {
+		r.layer.Refresh()
+	}
+	r.d.panel.Refresh()
+	canvas.Refresh(r.d)
+}
+
+func (ui *sessionUI) showDarkPanelOverlay(panel fyne.CanvasObject, pos fyne.Position) {
+	if ui.win == nil {
+		return
+	}
+	// Close any existing dark panel first.
+	ui.closeDarkOverlay()
+
+	c := ui.win.Canvas()
+	th := darkPanelTheme{Theme: theme.Current()}
+	themed := container.NewThemeOverride(panel, th)
+	ps := themed.MinSize()
+	// Honor explicit Resize on the panel (e.g. Type dialog 480×280).
+	if panel.Size().Width > ps.Width {
+		ps.Width = panel.Size().Width
+	}
+	if panel.Size().Height > ps.Height {
+		ps.Height = panel.Size().Height
+	}
+	if ps.Width < 200 {
+		ps.Width = 200
+	}
+	if ps.Height < 80 {
+		ps.Height = 80
+	}
+	ov := &darkOverlay{
+		canvas:    c,
+		panel:     themed,
+		panelPos:  pos,
+		panelSize: ps,
+	}
+	ov.ExtendBaseWidget(ov)
+	ov.onDismiss = func() {
+		ui.darkOverlay = nil
+		if ui.chrome != nil {
+			ui.chrome.setMenuOpen(false)
+			ui.scheduleChromeHide()
+		}
+	}
+	if ui.chrome != nil {
+		ui.chrome.setMenuOpen(true)
+		ui.chrome.cancelHide()
+	}
+	ui.darkOverlay = ov
+	ov.Show()
+}
+
+func (ui *sessionUI) closeDarkOverlay() {
+	if ui == nil || ui.darkOverlay == nil {
+		return
+	}
+	ov := ui.darkOverlay
+	ui.darkOverlay = nil
+	// Prevent double onDismiss chrome handling races.
+	fn := ov.onDismiss
+	ov.onDismiss = nil
+	if ov.shown && ov.canvas != nil {
+		ov.canvas.Overlays().Remove(ov)
+		ov.shown = false
+	}
+	ov.BaseWidget.Hide()
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -279,16 +508,10 @@ func (ui *sessionUI) showChromeSendKeysMenu(anchor fyne.CanvasObject) {
 	if ui.win == nil {
 		return
 	}
-	// Compact custom list: Fyne PopUpMenu text is oversized for a dense key list.
-	var pop *widget.PopUp
-	closePop := func() {
-		if pop != nil {
-			pop.Hide()
-		}
-		if ui.chrome != nil {
-			ui.chrome.setMenuOpen(false)
-			ui.scheduleChromeHide()
-		}
+	// Compact dark list: white labels, no light PopUp boarder.
+	var closePop func()
+	closePop = func() {
+		ui.closeDarkOverlay()
 	}
 
 	rows := make([]fyne.CanvasObject, 0, len(StandardSendKeys())+2)
@@ -299,7 +522,8 @@ func (ui *sessionUI) showChromeSendKeysMenu(anchor fyne.CanvasObject) {
 			ui.sendKeys(preset)
 		})
 		btn.Alignment = widget.ButtonAlignLeading
-		btn.Importance = widget.LowImportance
+		// MediumImportance uses Foreground (white under darkPanelTheme).
+		btn.Importance = widget.MediumImportance
 		rows = append(rows, btn)
 	}
 	typeBtn := widget.NewButton("Type text…", func() {
@@ -307,34 +531,29 @@ func (ui *sessionUI) showChromeSendKeysMenu(anchor fyne.CanvasObject) {
 		ui.showTypeTextDialog()
 	})
 	typeBtn.Alignment = widget.ButtonAlignLeading
-	typeBtn.Importance = widget.LowImportance
-	rows = append(rows, widget.NewSeparator(), typeBtn)
+	typeBtn.Importance = widget.MediumImportance
+	// Dark hairline instead of theme Separator (often light).
+	sep := canvas.NewRectangle(color.NRGBA{R: 60, G: 62, B: 70, A: 255})
+	sep.SetMinSize(fyne.NewSize(1, 1))
+	rows = append(rows, container.NewGridWrap(fyne.NewSize(180, 1), sep), typeBtn)
 
 	list := container.NewVBox(rows...)
-	// Cap height so a long list scrolls; keep width modest.
 	scroll := container.NewVScroll(list)
-	scroll.SetMinSize(fyne.NewSize(200, 280))
+	scroll.SetMinSize(fyne.NewSize(210, 280))
 
-	bg := canvas.NewRectangle(color.NRGBA{R: 32, G: 32, B: 36, A: 245})
-	bg.CornerRadius = 4
-	bg.StrokeColor = color.NRGBA{R: 90, G: 90, B: 100, A: 200}
+	bg := canvas.NewRectangle(color.NRGBA{R: 32, G: 32, B: 36, A: 255})
+	bg.CornerRadius = 6
+	// Subtle dark edge only (no white stroke).
+	bg.StrokeColor = color.NRGBA{R: 55, G: 58, B: 66, A: 255}
 	bg.StrokeWidth = 1
 	body := container.NewStack(bg, container.NewPadded(scroll))
-	themed := container.NewThemeOverride(body, keysMenuTheme{Theme: theme.Current()})
 
-	if ui.chrome != nil {
-		ui.chrome.setMenuOpen(true)
-		ui.chrome.cancelHide()
-	}
-	pop = widget.NewPopUp(themed, ui.win.Canvas())
-	// Dismiss when clicking outside (Fyne PopUp).
-	// Position under the Keys button.
+	pos := fyne.NewPos(8, 40)
 	if anchor != nil {
-		pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(anchor)
-		pop.ShowAtPosition(fyne.NewPos(pos.X, pos.Y+anchor.Size().Height+2))
-	} else {
-		pop.Show()
+		ap := fyne.CurrentApp().Driver().AbsolutePositionForObject(anchor)
+		pos = fyne.NewPos(ap.X, ap.Y+anchor.Size().Height+2)
 	}
+	ui.showDarkPanelOverlay(body, pos)
 }
 
 func (ui *sessionUI) showChromeMoreMenu(anchor fyne.CanvasObject) {
