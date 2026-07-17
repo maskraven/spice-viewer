@@ -426,3 +426,53 @@ const (
 	MaxCursorSide   = 256
 	MaxCursorPixels = MaxCursorSide * MaxCursorSide
 )
+
+// Playback channel server messages (spice/enums.h; start at MsgFirstAvail).
+// Wire layout from spice-common spice.proto @ spice-protocol pin used by this tree.
+const (
+	MsgPlaybackData    uint16 = 101 // SPICE_MSG_PLAYBACK_DATA
+	MsgPlaybackMode    uint16 = 102 // SPICE_MSG_PLAYBACK_MODE
+	MsgPlaybackStart   uint16 = 103 // SPICE_MSG_PLAYBACK_START
+	MsgPlaybackStop    uint16 = 104 // SPICE_MSG_PLAYBACK_STOP
+	MsgPlaybackVolume  uint16 = 105 // SPICE_MSG_PLAYBACK_VOLUME
+	MsgPlaybackMute    uint16 = 106 // SPICE_MSG_PLAYBACK_MUTE
+	MsgPlaybackLatency uint16 = 107 // SPICE_MSG_PLAYBACK_LATENCY
+)
+
+// Audio data modes (SpiceAudioDataMode) — wire is enum16.
+const (
+	AudioDataModeInvalid uint16 = 0
+	AudioDataModeRaw     uint16 = 1 // SPICE_AUDIO_DATA_MODE_RAW
+	AudioDataModeCELT051 uint16 = 2 // SPICE_AUDIO_DATA_MODE_CELT_0_5_1 (deprecated)
+	AudioDataModeOpus    uint16 = 3 // SPICE_AUDIO_DATA_MODE_OPUS
+)
+
+// Audio sample formats (SpiceAudioFmt) — wire is enum16.
+const (
+	AudioFmtInvalid uint16 = 0
+	AudioFmtS16     uint16 = 1 // SPICE_AUDIO_FMT_S16 (signed 16-bit LE PCM)
+)
+
+// Playback channel capability bit indices.
+const (
+	PlaybackCapCELT051 = 0 // SPICE_PLAYBACK_CAP_CELT_0_5_1 (deprecated)
+	PlaybackCapVolume  = 1 // SPICE_PLAYBACK_CAP_VOLUME
+	PlaybackCapLatency = 2 // SPICE_PLAYBACK_CAP_LATENCY
+	PlaybackCapOpus    = 3 // SPICE_PLAYBACK_CAP_OPUS
+)
+
+// Wire body sizes for fixed playback messages (packed, little-endian).
+const (
+	// PlaybackModeFixedSize is time u32 + mode enum16 (trailing mode-specific data optional).
+	PlaybackModeFixedSize = 6
+	// PlaybackStartSize is channels u32 + format enum16 + frequency u32 + time u32.
+	PlaybackStartSize = 14
+	// PlaybackDataHeaderSize is the time u32 prefix of PLAYBACK_DATA.
+	PlaybackDataHeaderSize = 4
+	// PlaybackLatencySize is latency_ms u32.
+	PlaybackLatencySize = 4
+	// PlaybackMuteSize is mute u8.
+	PlaybackMuteSize = 1
+	// PlaybackVolumeMinSize is nchannels u8 (volume array follows).
+	PlaybackVolumeMinSize = 1
+)

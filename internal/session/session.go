@@ -38,10 +38,11 @@ type Config struct {
 }
 
 // Session owns SPICE session lifecycle: main link, MAIN_INIT session_id,
-// CHANNELS_LIST, and parallel child channel links (display, inputs, cursor).
+// CHANNELS_LIST, and parallel child channel links (display, inputs, cursor,
+// playback).
 //
 // No auto-reconnect for short-lived Proxmox tickets.
-// Phase 1 does not open playback/record/usbredir/port/webdav.
+// Record/usbredir/port/webdav are not opened in this phase.
 type Session struct {
 	endpoint connector.Endpoint
 	password []byte // private copy; wiped on Close
@@ -62,10 +63,12 @@ type Session struct {
 	mainInit     *protocol.MainInit
 	channelList  []protocol.ChannelID
 
-	displayConn net.Conn
-	inputsConn  net.Conn
-	cursorConn  net.Conn
-	cursorErr   error // non-nil if best-effort cursor open failed
+	displayConn  net.Conn
+	inputsConn   net.Conn
+	cursorConn   net.Conn
+	cursorErr    error // non-nil if best-effort cursor open failed
+	playbackConn net.Conn
+	playbackErr  error // non-nil if best-effort playback open failed
 
 	// openState serializes OpenChannels and distinguishes idle/ready/failed.
 	openState openState
@@ -210,7 +213,7 @@ func (s *Session) ConnectionID() uint32 {
 }
 
 // ChannelsReady reports whether OpenChannels completed successfully
-// (display+inputs linked; cursor may be degraded).
+// (display+inputs linked; cursor/playback may be degraded).
 func (s *Session) ChannelsReady() bool {
 	if s == nil {
 		return false
@@ -260,6 +263,26 @@ func (s *Session) CursorError() error {
 	return s.cursorErr
 }
 
+// PlaybackConn returns the linked playback channel connection, or nil.
+func (s *Session) PlaybackConn() net.Conn {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.playbackConn
+}
+
+// PlaybackError returns the best-effort playback open error, if any.
+func (s *Session) PlaybackError() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.playbackErr
+}
+
 // MainInit returns a copy of MAIN_INIT after a successful OpenChannels.
 // ok is false if open has not succeeded.
 func (s *Session) MainInit() (protocol.MainInit, bool) {
@@ -279,7 +302,7 @@ func (s *Session) MainInit() (protocol.MainInit, bool) {
 //  1. cancel session context (stop new opens)
 //  2. wait for in-flight OpenChannels (timeout) so mid-link work exits before
 //     we close sockets it may still be using
-//  3. close inputs → display → cursor → main
+//  3. close inputs → display → cursor → playback → main
 //  4. wipe password
 //
 // Waiting before channel close (vs after) is intentional: cancel unblocks open
@@ -304,10 +327,12 @@ func (s *Session) Close() error {
 	inputs := s.inputsConn
 	display := s.displayConn
 	cursor := s.cursorConn
+	playback := s.playbackConn
 	main := s.mainConn
 	s.inputsConn = nil
 	s.displayConn = nil
 	s.cursorConn = nil
+	s.playbackConn = nil
 	s.mainConn = nil
 	s.connectionID = 0
 	s.mu.Unlock()
@@ -329,9 +354,9 @@ func (s *Session) Close() error {
 		log.Printf("session: close: timed out waiting for channel opens")
 	}
 
-	// 3. close order: inputs → display → cursor → main
+	// 3. close order: inputs → display → cursor → playback → main
 	var firstErr error
-	for _, c := range []net.Conn{inputs, display, cursor, main} {
+	for _, c := range []net.Conn{inputs, display, cursor, playback, main} {
 		if c == nil {
 			continue
 		}

@@ -20,7 +20,7 @@ func TestPhase1OpenPolicy(t *testing.T) {
 		{protocol.ChannelInputs, true, true},
 		{protocol.ChannelCursor, true, false},
 		{protocol.ChannelMain, false, false},
-		{protocol.ChannelPlayback, false, false},
+		{protocol.ChannelPlayback, true, false}, // Phase 2 best-effort
 		{protocol.ChannelRecord, false, false},
 		{protocol.ChannelUSBRedir, false, false},
 		{protocol.ChannelPort, false, false},

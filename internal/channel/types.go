@@ -30,12 +30,15 @@ const (
 	PolicyBestEffort
 )
 
-// PolicyFor returns the Phase-1 open policy for a SPICE channel type.
+// PolicyFor returns the open policy for a SPICE channel type.
+//
+// Phase 1 required: display, inputs. Best-effort: cursor, playback (Phase 2).
+// Main is opened via DialMain, not the child open path.
 func PolicyFor(channelType uint8) OpenPolicy {
 	switch channelType {
 	case protocol.ChannelDisplay, protocol.ChannelInputs:
 		return PolicyRequired
-	case protocol.ChannelCursor:
+	case protocol.ChannelCursor, protocol.ChannelPlayback:
 		return PolicyBestEffort
 	case protocol.ChannelMain:
 		// Main is opened separately (DialMain), not via child open path.
@@ -46,7 +49,8 @@ func PolicyFor(channelType uint8) OpenPolicy {
 }
 
 // IsPhase1Open reports whether session should attempt to open this channel type
-// after CHANNELS_LIST (required or best-effort).
+// after CHANNELS_LIST (required or best-effort). Named for historical Phase-1
+// use; Phase 2 also opens PLAYBACK as best-effort via the same helper.
 func IsPhase1Open(channelType uint8) bool {
 	p := PolicyFor(channelType)
 	return p == PolicyRequired || p == PolicyBestEffort

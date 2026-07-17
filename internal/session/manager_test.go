@@ -171,12 +171,22 @@ func serveMainPostLink(t *testing.T, conn net.Conn, sessionID uint32, channels [
 	return nil
 }
 
+// defaultChannelList is display+inputs+cursor (3 children). Tests that need
+// playback list it explicitly and allocate an extra pipe.
 func defaultChannelList() []protocol.ChannelID {
 	return []protocol.ChannelID{
 		{Type: protocol.ChannelDisplay, ID: 0},
 		{Type: protocol.ChannelInputs, ID: 0},
 		{Type: protocol.ChannelCursor, ID: 0},
-		{Type: protocol.ChannelPlayback, ID: 0}, // must not be opened
+	}
+}
+
+func channelListWithPlayback() []protocol.ChannelID {
+	return []protocol.ChannelID{
+		{Type: protocol.ChannelDisplay, ID: 0},
+		{Type: protocol.ChannelInputs, ID: 0},
+		{Type: protocol.ChannelCursor, ID: 0},
+		{Type: protocol.ChannelPlayback, ID: 0},
 	}
 }
 
@@ -260,30 +270,33 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 	dispDER, dispPriv := genSpiceTicketKey(t)
 	inDER, inPriv := genSpiceTicketKey(t)
 	curDER, curPriv := genSpiceTicketKey(t)
+	pbDER, pbPriv := genSpiceTicketKey(t)
 
-	// Map for child servers: dial order 1..3 gets keys assigned when LinkMess type known.
+	// Map for child servers: dial order 1..4 gets keys assigned when LinkMess type known.
 	// Each server uses a key selected by channel type from this table.
 	keyByType := map[uint8]struct {
 		der  []byte
 		priv *rsa.PrivateKey
 	}{
-		protocol.ChannelDisplay: {dispDER, dispPriv},
-		protocol.ChannelInputs:  {inDER, inPriv},
-		protocol.ChannelCursor:  {curDER, curPriv},
+		protocol.ChannelDisplay:  {dispDER, dispPriv},
+		protocol.ChannelInputs:   {inDER, inPriv},
+		protocol.ChannelCursor:   {curDER, curPriv},
+		protocol.ChannelPlayback: {pbDER, pbPriv},
 	}
 
 	password := []byte("ticket-secret")
 	const sessionID uint32 = 0x0a0b0c0d
 
-	// Pipes: [0]=main, [1..3]=children (any order)
-	clients := make([]net.Conn, 4)
-	servers := make([]net.Conn, 4)
-	for i := 0; i < 4; i++ {
+	// Pipes: [0]=main, [1..4]=children (any order)
+	const n = 5
+	clients := make([]net.Conn, n)
+	servers := make([]net.Conn, n)
+	for i := 0; i < n; i++ {
 		c, s := net.Pipe()
 		clients[i], servers[i] = c, s
 	}
 	defer func() {
-		for i := 0; i < 4; i++ {
+		for i := 0; i < n; i++ {
 			_ = clients[i].Close()
 			_ = servers[i].Close()
 		}
@@ -320,7 +333,7 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 			return
 		}
 		encrypts.Add(1)
-		if err := serveMainPostLink(t, servers[0], sessionID, defaultChannelList()); err != nil {
+		if err := serveMainPostLink(t, servers[0], sessionID, channelListWithPlayback()); err != nil {
 			errCh <- fmt.Errorf("main post-link: %w", err)
 			return
 		}
@@ -328,7 +341,7 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 	}()
 
 	// Child servers: decrypt only with that channel type's key; wrongPriv = main key.
-	for i := 1; i < 4; i++ {
+	for i := 1; i < n; i++ {
 		i := i
 		go func() {
 			errCh <- runChildLinkServerByType(t, servers[i], keyByType, mainPriv, password, &childByType, &encrypts, cts)
@@ -361,29 +374,32 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 	if s.ConnectionID() != sessionID {
 		t.Fatalf("ConnectionID=%#x want %#x", s.ConnectionID(), sessionID)
 	}
-	if s.DisplayConn() == nil || s.InputsConn() == nil || s.CursorConn() == nil {
-		t.Fatalf("missing child conns display=%v inputs=%v cursor=%v",
-			s.DisplayConn() != nil, s.InputsConn() != nil, s.CursorConn() != nil)
+	if s.DisplayConn() == nil || s.InputsConn() == nil || s.CursorConn() == nil || s.PlaybackConn() == nil {
+		t.Fatalf("missing child conns display=%v inputs=%v cursor=%v playback=%v",
+			s.DisplayConn() != nil, s.InputsConn() != nil, s.CursorConn() != nil, s.PlaybackConn() != nil)
 	}
 	if s.CursorError() != nil {
 		t.Fatalf("unexpected cursor error: %v", s.CursorError())
+	}
+	if s.PlaybackError() != nil {
+		t.Fatalf("unexpected playback error: %v", s.PlaybackError())
 	}
 
 	if mainMess == nil || mainMess.ConnectionID != 0 {
 		t.Fatalf("main mess=%+v", mainMess)
 	}
 
-	if dialer.dials.Load() != 4 {
-		t.Fatalf("dials=%d want 4 (main+display+inputs+cursor)", dialer.dials.Load())
+	if dialer.dials.Load() != n {
+		t.Fatalf("dials=%d want %d (main+display+inputs+cursor+playback)", dialer.dials.Load(), n)
 	}
-	if encrypts.Load() != 4 {
-		t.Fatalf("encrypt/auth count=%d want 4", encrypts.Load())
+	if encrypts.Load() != n {
+		t.Fatalf("encrypt/auth count=%d want %d", encrypts.Load(), n)
 	}
 
 	// All child ciphertexts must be distinct (fresh OAEP encrypt per channel).
 	cts.mu.Lock()
-	if len(cts.all) != 3 {
-		t.Fatalf("child ciphertexts=%d want 3", len(cts.all))
+	if len(cts.all) != n-1 {
+		t.Fatalf("child ciphertexts=%d want %d", len(cts.all), n-1)
 	}
 	for i := 0; i < len(cts.all); i++ {
 		for j := i + 1; j < len(cts.all); j++ {
@@ -396,7 +412,10 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 
 	childByType.mu.Lock()
 	defer childByType.mu.Unlock()
-	for _, typ := range []uint8{protocol.ChannelDisplay, protocol.ChannelInputs, protocol.ChannelCursor} {
+	for _, typ := range []uint8{
+		protocol.ChannelDisplay, protocol.ChannelInputs,
+		protocol.ChannelCursor, protocol.ChannelPlayback,
+	} {
 		m := childByType.mess[typ]
 		if m == nil {
 			t.Fatalf("missing LinkMess for channel type %d", typ)
@@ -408,11 +427,16 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 			t.Fatalf("type %d channel_id=%d", typ, m.ChannelID)
 		}
 	}
-	if _, ok := childByType.mess[protocol.ChannelPlayback]; ok {
-		t.Fatal("playback must not be opened")
+	// Playback link should advertise VOLUME cap only (no OPUS).
+	pbMess := childByType.mess[protocol.ChannelPlayback]
+	if !protocol.HasCap(pbMess.ChannelCaps, protocol.PlaybackCapVolume) {
+		t.Fatalf("playback missing VOLUME cap: %v", pbMess.ChannelCaps)
+	}
+	if protocol.HasCap(pbMess.ChannelCaps, protocol.PlaybackCapOpus) {
+		t.Fatal("playback must not advertise OPUS (RAW preferred)")
 	}
 
-	for i := 0; i < 4; i++ {
+	for i := 0; i < n; i++ {
 		if err := <-errCh; err != nil {
 			t.Fatalf("server: %v", err)
 		}
@@ -1217,7 +1241,7 @@ func TestOpenChannels_NoCursorInList_OK(t *testing.T) {
 		errCh <- serveMainPostLink(t, servers[0], sessionID, []protocol.ChannelID{
 			{Type: protocol.ChannelDisplay, ID: 0},
 			{Type: protocol.ChannelInputs, ID: 0},
-			{Type: protocol.ChannelPlayback, ID: 0}, // ignored
+			// No cursor or playback in list: both optional.
 		})
 	}()
 	for i := 1; i < 3; i++ {
@@ -1257,6 +1281,12 @@ func TestOpenChannels_NoCursorInList_OK(t *testing.T) {
 	}
 	if sess.CursorError() != nil {
 		t.Fatalf("CursorError should be nil when cursor not listed: %v", sess.CursorError())
+	}
+	if sess.PlaybackConn() != nil {
+		t.Fatal("playback should be absent when not in list")
+	}
+	if sess.PlaybackError() != nil {
+		t.Fatalf("PlaybackError should be nil when playback not listed: %v", sess.PlaybackError())
 	}
 	for i := 0; i < 3; i++ {
 		if err := <-errCh; err != nil {

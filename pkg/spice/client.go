@@ -24,7 +24,8 @@ import (
 // eventBuf is the capacity of Client.Events.
 const eventBuf = 16
 
-// Client is a live SPICE session (main + display + inputs; cursor best-effort).
+// Client is a live SPICE session (main + display + inputs; cursor and
+// playback best-effort).
 //
 // Create with Connect. There is no auto-reconnect for ticket sessions: on
 // disconnect, open a new connection file and call Connect again.
@@ -47,10 +48,11 @@ type Client struct {
 	lifeCtx    context.Context
 	lifeCancel context.CancelFunc
 
-	display *channel.Display
-	inputs  *channel.Inputs
-	cursor  *channel.Cursor
-	pubIn   *Inputs
+	display  *channel.Display
+	inputs   *channel.Inputs
+	cursor   *channel.Cursor
+	playback *channel.Playback
+	pubIn    *Inputs
 
 	closed     bool
 	disconnect sync.Once
@@ -67,7 +69,7 @@ type Client struct {
 }
 
 // Connect dials the SPICE peer described by cfg, completes main + child links,
-// starts display/inputs/cursor run loops, and returns a live Client.
+// starts display/inputs/cursor/playback run loops, and returns a live Client.
 //
 // Password ownership:
 //   - cfg.Password is deep-copied into the session; the caller's slice is not wiped.
@@ -78,7 +80,7 @@ type Client struct {
 // retained or wiped by the Client (callers may wipe their own CACertPEM slice).
 //
 // Event order on success: EventConnected first, then any deferred EventError
-// (e.g. cursor open degrade). Disconnected is terminal; no auto-reconnect.
+// (e.g. cursor/playback open degrade). Disconnected is terminal; no auto-reconnect.
 //
 // Phase 1: AllowReconnect is ignored.
 func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
@@ -129,7 +131,7 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 		fatalCh:    make(chan error, 1),
 	}
 
-	cursorOpenErr, err := c.startChannels(cfg.Drivers)
+	bestEffortErrs, err := c.startChannels(cfg.Drivers)
 	if err != nil {
 		lifeCancel()
 		_ = sess.Close()
@@ -142,15 +144,17 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 
 	// Connected first; then deferred non-fatal errors (F5).
 	c.emit(Event{Type: EventConnected})
-	if cursorOpenErr != nil {
-		c.emit(Event{Type: EventError, Err: cursorOpenErr})
+	for _, e := range bestEffortErrs {
+		if e != nil {
+			c.emit(Event{Type: EventError, Err: e})
+		}
 	}
 	return c, nil
 }
 
-// startChannels constructs display/inputs/cursor handlers and starts Run loops.
-// Returns a non-nil cursorOpenErr when cursor open failed (best-effort degrade).
-func (c *Client) startChannels(drivers Drivers) (cursorOpenErr error, err error) {
+// startChannels constructs display/inputs/cursor/playback handlers and starts
+// Run loops. Returns non-nil best-effort open errors (cursor/playback degrade).
+func (c *Client) startChannels(drivers Drivers) (bestEffortErrs []error, err error) {
 	dispConn := c.sess.DisplayConn()
 	inpConn := c.sess.InputsConn()
 	if dispConn == nil || inpConn == nil {
@@ -186,8 +190,20 @@ func (c *Client) startChannels(drivers Drivers) (cursorOpenErr error, err error)
 	curConn := c.sess.CursorConn()
 	if curConn != nil {
 		c.cursor = channel.NewCursor(curConn, asCursorDriver(drivers.Cursor))
-	} else {
-		cursorOpenErr = c.sess.CursorError()
+	} else if e := c.sess.CursorError(); e != nil {
+		bestEffortErrs = append(bestEffortErrs, e)
+	}
+
+	// Playback (best-effort; conn may be nil). Nil driver → NullPlayback.
+	pbConn := c.sess.PlaybackConn()
+	if pbConn != nil {
+		pdrv := asPlaybackDriver(drivers.Playback)
+		if pdrv == nil {
+			pdrv = channel.NewNullPlayback()
+		}
+		c.playback = channel.NewPlayback(pbConn, pdrv)
+	} else if e := c.sess.PlaybackError(); e != nil {
+		bestEffortErrs = append(bestEffortErrs, e)
 	}
 
 	// Run loops.
@@ -208,6 +224,13 @@ func (c *Client) startChannels(drivers Drivers) (cursorOpenErr error, err error)
 		})
 	}
 
+	if c.playback != nil {
+		c.wg.Add(1)
+		go c.runBestEffort("playback", func() error {
+			return c.playback.Run(c.lifeCtx)
+		})
+	}
+
 	// Main channel: keep-alive / mouse mode until EOF.
 	if main := c.sess.MainConn(); main != nil {
 		c.wg.Add(1)
@@ -216,7 +239,7 @@ func (c *Client) startChannels(drivers Drivers) (cursorOpenErr error, err error)
 		})
 	}
 
-	return cursorOpenErr, nil
+	return bestEffortErrs, nil
 }
 
 // runFatal runs fn; on unexpected error signals session-fatal disconnect.

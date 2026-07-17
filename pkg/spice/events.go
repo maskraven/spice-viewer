@@ -15,7 +15,7 @@ const (
 	// Err may carry a classified transport/ticket error; nil means clean close.
 	// A fatal error recorded before Close is preserved (Close does not force nil).
 	EventDisconnected
-	// EventError reports a non-fatal or pre-disconnect error (e.g. cursor degrade).
+	// EventError reports a non-fatal or pre-disconnect error (e.g. cursor/playback degrade).
 	// Fatal channel failures also emit EventDisconnected (not only EventError).
 	EventError
 )

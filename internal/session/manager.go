@@ -31,12 +31,13 @@ const (
 )
 
 // OpenChannels reads MAIN_INIT and CHANNELS_LIST on the linked main channel,
-// then opens Phase-1 child channels in parallel:
+// then opens child channels in parallel:
 //
 //   - DISPLAY and INPUTS: required (failure is session-fatal)
 //   - CURSOR: best-effort (failure logs a warning; session continues)
+//   - PLAYBACK: best-effort (Phase 2; failure logs a warning; session continues)
 //
-// Playback, record, usbredir, port, and webdav are never opened in Phase 1.
+// Record, usbredir, port, and webdav are never opened in this phase.
 //
 // Prerequisites: main link complete (DialMain / LinkMain). Children use
 // connection_id = session_id from MAIN_INIT and a fresh ticket encrypt per
@@ -95,6 +96,8 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 			s.inputsConn = nil
 			s.cursorConn = nil
 			s.cursorErr = nil
+			s.playbackConn = nil
+			s.playbackErr = nil
 			s.connectionID = 0
 			s.mainInit = nil
 			s.channelList = nil
@@ -139,8 +142,8 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 	}
 
 	var (
-		displayConn, inputsConn, cursorConn net.Conn
-		cursorErr                           error
+		displayConn, inputsConn, cursorConn, playbackConn net.Conn
+		cursorErr, playbackErr                            error
 	)
 
 	jobs := []openJob{
@@ -149,6 +152,9 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 	}
 	if want.cursor != nil {
 		jobs = append(jobs, openJob{ch: *want.cursor, fatal: false, result: &cursorConn, errOut: &cursorErr})
+	}
+	if want.playback != nil {
+		jobs = append(jobs, openJob{ch: *want.playback, fatal: false, result: &playbackConn, errOut: &playbackErr})
 	}
 
 	var (
@@ -244,7 +250,7 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 
 	if fatalErr != nil {
 		// Tear down any children that succeeded before the fatal failure.
-		for _, c := range []net.Conn{displayConn, inputsConn, cursorConn} {
+		for _, c := range []net.Conn{displayConn, inputsConn, cursorConn, playbackConn} {
 			if c != nil {
 				_ = c.Close()
 			}
@@ -255,11 +261,14 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 	if cursorErr != nil {
 		log.Printf("session: cursor channel open failed (degraded): %v", cursorErr)
 	}
+	if playbackErr != nil {
+		log.Printf("session: playback channel open failed (degraded): %v", playbackErr)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		for _, c := range []net.Conn{displayConn, inputsConn, cursorConn} {
+		for _, c := range []net.Conn{displayConn, inputsConn, cursorConn, playbackConn} {
 			if c != nil {
 				_ = c.Close()
 			}
@@ -276,20 +285,23 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 	s.inputsConn = inputsConn
 	s.cursorConn = cursorConn
 	s.cursorErr = cursorErr
+	s.playbackConn = playbackConn
+	s.playbackErr = playbackErr
 	s.openState = openReady
 	success = true
 	return nil
 }
 
-// phase1Want holds the first listed instance of each Phase-1 channel type.
+// phase1Want holds the first listed instance of each openable channel type.
 type phase1Want struct {
-	display *protocol.ChannelID
-	inputs  *protocol.ChannelID
-	cursor  *protocol.ChannelID
+	display  *protocol.ChannelID
+	inputs   *protocol.ChannelID
+	cursor   *protocol.ChannelID
+	playback *protocol.ChannelID
 }
 
-// selectPhase1Channels picks DISPLAY, INPUTS, and optional CURSOR from the list.
-// Unsupported types (playback, record, usbredir, port, webdav, …) are ignored.
+// selectPhase1Channels picks DISPLAY, INPUTS, and optional CURSOR/PLAYBACK.
+// Unsupported types (record, usbredir, port, webdav, …) are ignored.
 func selectPhase1Channels(list []protocol.ChannelID) phase1Want {
 	var w phase1Want
 	for i := range list {
@@ -312,6 +324,11 @@ func selectPhase1Channels(list []protocol.ChannelID) phase1Want {
 			if w.cursor == nil {
 				c := ch
 				w.cursor = &c
+			}
+		case protocol.ChannelPlayback:
+			if w.playback == nil {
+				c := ch
+				w.playback = &c
 			}
 		}
 	}
@@ -337,10 +354,23 @@ func (s *Session) dialAndLinkChild(ctx context.Context, connectionID uint32, ch 
 		return nil, mapDialError(err)
 	}
 
+	// Advertise per-channel caps so the server enables preferred features.
+	// Inputs: KEY_SCANCODE (spice-gtk always sets SPICE_INPUTS_CAP_KEY_SCANCODE).
+	// Playback: VOLUME only (no OPUS/CELT) so the server prefers RAW PCM, which
+	// Phase 2 decodes without cgo/native audio codecs.
+	var channelCaps []uint32
+	switch ch.Type {
+	case protocol.ChannelInputs:
+		channelCaps = protocol.CapsFromBits(protocol.InputsCapKeyScancode)
+	case protocol.ChannelPlayback:
+		channelCaps = protocol.CapsFromBits(protocol.PlaybackCapVolume)
+	}
+
 	err = linkChannel(ctx, conn, pw, linkParams{
 		ConnectionID: connectionID,
 		ChannelType:  ch.Type,
 		ChannelID:    ch.ID,
+		ChannelCaps:  channelCaps,
 	})
 	if err != nil {
 		_ = conn.Close()

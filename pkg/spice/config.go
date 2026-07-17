@@ -26,11 +26,12 @@ type HotkeyConfig struct {
 	ToggleFullscreen string
 }
 
-// Drivers is the optional set of frame/cursor sinks supplied by the UI.
-// Nil fields use headless defaults (NullDriver / no cursor shape).
+// Drivers is the optional set of frame/cursor/audio sinks supplied by the UI.
+// Nil fields use headless defaults (NullDriver / no cursor shape / NullPlayback).
 type Drivers struct {
-	Display DisplayDriver
-	Cursor  CursorDriver
+	Display  DisplayDriver
+	Cursor   CursorDriver
+	Playback PlaybackDriver
 }
 
 // ConnectConfig is the library entry configuration for a SPICE session.
