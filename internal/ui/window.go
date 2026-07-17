@@ -32,9 +32,13 @@ type sessionUI struct {
 	client *spice.Client
 	inputs *spice.Inputs
 	chrome *controlChrome
-	status *widget.Label
 	// statusStrip is the bottom compact bar; hidden in fullscreen.
 	statusStrip *statusBar
+
+	// statusAction is a transient message shown after the base status line
+	// (e.g. "Sent Windows / Super"). Cleared by timer or overwritten.
+	statusAction      string
+	statusActionTimer *time.Timer
 
 	mu     sync.Mutex
 	mods   uint8 // currently pressed modifiers (host)
@@ -56,7 +60,6 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 		surface: surface,
 		bind:    bind,
 		fs:      startFullscreen,
-		status:  newStatusLabel("Connecting…"),
 	}
 
 	pad := newMousePad(ui, view)
@@ -65,9 +68,9 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 	chromeOverlay := ui.installChrome()
 
 	// Guest fills the area; chrome overlays (does not shrink the display).
-	// Bottom: compact single-line status strip.
+	// Bottom: compact single-line status strip (left-aligned).
 	stage := container.NewStack(pad, chromeOverlay)
-	ui.statusStrip = newStatusBar(ui.status)
+	ui.statusStrip = newStatusBar("Connecting…")
 	content := container.NewBorder(nil, ui.statusStrip, nil, nil, stage)
 	win.SetContent(content)
 	win.Resize(fyne.NewSize(1024, 768))
@@ -86,39 +89,37 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 	return ui
 }
 
-// newStatusLabel builds a single-line caption status label (ellipsis when tight).
-func newStatusLabel(text string) *widget.Label {
-	l := widget.NewLabel(text)
-	l.Truncation = fyne.TextTruncateEllipsis
-	l.Wrapping = fyne.TextWrapOff
-	l.SizeName = theme.SizeNameCaptionText
-	l.Alignment = fyne.TextAlignCenter
-	// MediumImportance keeps text readable on the status strip.
-	l.Importance = widget.MediumImportance
-	return l
-}
-
-// statusBar is a hairline + single caption line. Height matches text so glyphs
-// are never clipped (an earlier forced MinSize was shorter than the label).
+// statusBar is a hairline + left-aligned, vertically centered caption line.
+// Uses canvas.Text so glyphs are not stuck to the bottom of a padded Label.
 type statusBar struct {
 	widget.BaseWidget
-	label *widget.Label
-	sep   *canvas.Rectangle
+	text *canvas.Text
+	sep  *canvas.Rectangle
 }
 
-func newStatusBar(label *widget.Label) *statusBar {
+func newStatusBar(initial string) *statusBar {
+	txt := canvas.NewText(initial, theme.Color(theme.ColorNameForeground))
+	txt.TextSize = theme.Size(theme.SizeNameCaptionText)
+	txt.TextStyle = fyne.TextStyle{}
+	txt.Alignment = fyne.TextAlignLeading
 	sep := canvas.NewRectangle(theme.Color(theme.ColorNameSeparator))
-	s := &statusBar{
-		label: label,
-		sep:   sep,
-	}
+	s := &statusBar{text: txt, sep: sep}
 	s.ExtendBaseWidget(s)
 	return s
 }
 
+// SetLine updates the visible status string.
+func (s *statusBar) SetLine(line string) {
+	if s == nil || s.text == nil {
+		return
+	}
+	s.text.Text = line
+	s.Refresh()
+}
+
 func (s *statusBar) CreateRenderer() fyne.WidgetRenderer {
 	s.ExtendBaseWidget(s)
-	return &statusBarRenderer{bar: s, objects: []fyne.CanvasObject{s.sep, s.label}}
+	return &statusBarRenderer{bar: s, objects: []fyne.CanvasObject{s.sep, s.text}}
 }
 
 func (s *statusBar) MinSize() fyne.Size {
@@ -128,15 +129,13 @@ func (s *statusBar) MinSize() fyne.Size {
 	if sepH < 1 {
 		sepH = 1
 	}
-	// Caption line + small pad so descenders are never clipped.
-	textH := th.Size(theme.SizeNameCaptionText) + th.Size(theme.SizeNameInnerPadding)
-	if textH < 16 {
-		textH = 16
-	}
-	return fyne.NewSize(48, sepH+textH)
+	// One caption line + small vertical pad (text centered inside this band).
+	textH := th.Size(theme.SizeNameCaptionText)
+	padY := float32(4)
+	return fyne.NewSize(48, sepH+textH+padY*2)
 }
 
-// statusBarRenderer lays out separator + label without Border padding bloat.
+// statusBarRenderer: sep on top edge; text left + vertically centered in the rest.
 type statusBarRenderer struct {
 	bar     *statusBar
 	objects []fyne.CanvasObject
@@ -156,15 +155,25 @@ func (r *statusBarRenderer) Layout(size fyne.Size) {
 	r.bar.sep.FillColor = theme.Color(theme.ColorNameSeparator)
 	r.bar.sep.Resize(fyne.NewSize(size.Width, sepH))
 	r.bar.sep.Move(fyne.NewPos(0, 0))
-	// Full-width label + TextAlignCenter → status text centered horizontally.
+
 	padX := float32(8)
-	labelH := size.Height - sepH
-	if labelH < 1 {
-		labelH = 1
+	r.bar.text.Color = theme.Color(theme.ColorNameForeground)
+	r.bar.text.TextSize = th.Size(theme.SizeNameCaptionText)
+	r.bar.text.Alignment = fyne.TextAlignLeading
+
+	// Measure text and center it vertically in the content band (not baseline-bottom).
+	tm := fyne.MeasureText(r.bar.text.Text, r.bar.text.TextSize, r.bar.text.TextStyle)
+	contentH := size.Height - sepH
+	if contentH < 1 {
+		contentH = 1
 	}
-	r.bar.label.Alignment = fyne.TextAlignCenter
-	r.bar.label.Resize(fyne.NewSize(size.Width-padX*2, labelH))
-	r.bar.label.Move(fyne.NewPos(padX, sepH))
+	y := sepH + (contentH-tm.Height)/2
+	if y < sepH {
+		y = sepH
+	}
+	// Full remaining width so ellipsis-style long lines can still draw left-origin.
+	r.bar.text.Resize(fyne.NewSize(size.Width-padX*2, tm.Height+2))
+	r.bar.text.Move(fyne.NewPos(padX, y))
 }
 
 func (r *statusBarRenderer) MinSize() fyne.Size {
@@ -176,8 +185,9 @@ func (r *statusBarRenderer) Refresh() {
 		r.bar.sep.FillColor = theme.Color(theme.ColorNameSeparator)
 		r.bar.sep.Refresh()
 	}
-	if r.bar.label != nil {
-		r.bar.label.Refresh()
+	if r.bar.text != nil {
+		r.bar.text.Color = theme.Color(theme.ColorNameForeground)
+		r.bar.text.Refresh()
 	}
 	canvas.Refresh(r.bar)
 }

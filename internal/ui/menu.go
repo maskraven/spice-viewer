@@ -6,6 +6,7 @@ package ui
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
@@ -217,17 +218,56 @@ func (ui *sessionUI) showTypeTextDialog() {
 	form.Show()
 }
 
+const statusActionHold = 4 * time.Second
+
+// setStatus shows a transient action after the base connection status, e.g.
+// "vm  ·  free  ·  client mouse  ·  agent  ·  Sent Windows / Super".
 func (ui *sessionUI) setStatus(msg string) {
-	if ui.status == nil {
+	if ui == nil {
 		return
 	}
-	ui.status.SetText(msg)
+	ui.mu.Lock()
+	ui.statusAction = msg
+	if ui.statusActionTimer != nil {
+		ui.statusActionTimer.Stop()
+		ui.statusActionTimer = nil
+	}
+	if msg != "" {
+		ui.statusActionTimer = time.AfterFunc(statusActionHold, func() {
+			if fyne.CurrentApp() != nil {
+				fyne.Do(func() {
+					ui.clearStatusAction()
+				})
+				return
+			}
+			ui.clearStatusAction()
+		})
+	}
+	ui.mu.Unlock()
+	ui.paintStatus()
 }
 
-func (ui *sessionUI) refreshStatus() {
-	if ui.status == nil {
+func (ui *sessionUI) clearStatusAction() {
+	if ui == nil {
 		return
 	}
+	ui.mu.Lock()
+	ui.statusAction = ""
+	if ui.statusActionTimer != nil {
+		ui.statusActionTimer.Stop()
+		ui.statusActionTimer = nil
+	}
+	ui.mu.Unlock()
+	ui.paintStatus()
+}
+
+// refreshStatus rebuilds the base connection line and keeps any active action.
+func (ui *sessionUI) refreshStatus() {
+	ui.paintStatus()
+}
+
+// baseStatusLine is the persistent connection summary (left side of the bar).
+func (ui *sessionUI) baseStatusLine() string {
 	grab := "free"
 	if ui.grab.Active() {
 		grab = "grabbed"
@@ -251,6 +291,20 @@ func (ui *sessionUI) refreshStatus() {
 	if title == "" {
 		title = "SPICE"
 	}
-	// Single dense line; ellipsis when the window is narrow.
-	ui.status.SetText(fmt.Sprintf("%s  ·  %s  ·  %s  ·  %s", title, grab, mode, agent))
+	return fmt.Sprintf("%s  ·  %s  ·  %s  ·  %s", title, grab, mode, agent)
+}
+
+// paintStatus writes "base [ ·  action]" left-aligned into the status strip.
+func (ui *sessionUI) paintStatus() {
+	if ui == nil || ui.statusStrip == nil {
+		return
+	}
+	line := ui.baseStatusLine()
+	ui.mu.Lock()
+	action := ui.statusAction
+	ui.mu.Unlock()
+	if action != "" {
+		line = line + "  ·  " + action
+	}
+	ui.statusStrip.SetLine(line)
 }
