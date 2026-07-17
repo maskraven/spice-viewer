@@ -474,6 +474,14 @@ func (ui *sessionUI) onKeyDown(ev *fyne.KeyEvent) {
 		// extra click (still click-to-grab for mouse-only paths).
 		ui.enterGrab()
 	}
+
+	// Before a non-modifier key: drop guest modifiers the host is not holding.
+	// Fixes sticky Shift after TypeText/paste → Ctrl+C becomes Ctrl+Shift+C
+	// (Chrome Inspect / DevTools).
+	if !isModifierKey(name) {
+		ui.reconcileGuestModifiers(mods)
+	}
+
 	// spice-gtk: every physical key becomes KEY_DOWN with XT scancode.
 	sc := resolveKeyScancode(ev)
 	if sc == 0 {
@@ -487,6 +495,32 @@ func (ui *sessionUI) onKeyDown(ev *fyne.KeyEvent) {
 	if ui.inputs != nil {
 		if err := ui.inputs.KeyDown(sc); err != nil {
 			log.Printf("ui: key down: %v", err)
+		}
+	}
+}
+
+// reconcileGuestModifiers force-ups modifiers not held on the host so they
+// cannot stick in the guest (wire KeyUp can be lost after synthetic inject).
+func (ui *sessionUI) reconcileGuestModifiers(hostMods uint8) {
+	if ui == nil || ui.inputs == nil {
+		return
+	}
+	type modPair struct {
+		bit uint8
+		scs []uint16
+	}
+	for _, m := range []modPair{
+		{ModShift, []uint16{scanLShift, scanRShift}},
+		{ModCtrl, []uint16{scanLCtrl, scanRCtrl}},
+		{ModAlt, []uint16{scanLAlt, scanRAlt}},
+		{ModSuper, []uint16{scanLGUI, scanRGUI}},
+	} {
+		if hostMods&m.bit != 0 {
+			continue
+		}
+		for _, sc := range m.scs {
+			_ = ui.inputs.KeyUp(sc)
+			ui.noteKeyUp(sc)
 		}
 	}
 }

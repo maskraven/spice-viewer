@@ -166,11 +166,15 @@ func (ui *sessionUI) pasteToGuest() {
 			// Brief yield so the guest agent can process GRAB before REQUEST.
 			time.Sleep(40 * time.Millisecond)
 			if ui.inputs != nil {
+				// Clear sticky Shift first (Ctrl+Shift+V is not a normal paste).
+				ReleaseModifiers(ui.inputs)
 				if err := InjectSequence(ui.inputs, []uint16{scanLCtrl, letterScancode('v')}); err != nil {
 					log.Printf("ui: Ctrl+V after agent grab: %v", err)
+					ReleaseModifiers(ui.inputs)
 					ui.setStatus("Clipboard offered to guest — press Ctrl+V in guest")
 					return
 				}
+				ReleaseModifiers(ui.inputs)
 			}
 			ui.setStatus(fmt.Sprintf("Pasted %d chars (agent)", len([]rune(clip))))
 			return

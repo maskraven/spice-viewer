@@ -35,6 +35,25 @@ func TestInjectSequence_Order(t *testing.T) {
 	}
 }
 
+func TestReleaseModifiers_SendsKeyUps(t *testing.T) {
+	f := &fakeInputs{}
+	ReleaseModifiers(f)
+	if len(f.ups) < 8 {
+		t.Fatalf("expected modifier KeyUps, got %v", f.ups)
+	}
+	// Ensure Shift is included (stuck Shift + Ctrl+C → Chrome Inspect).
+	foundShift := false
+	for _, sc := range f.ups {
+		if sc == scanLShift || sc == scanRShift {
+			foundShift = true
+			break
+		}
+	}
+	if !foundShift {
+		t.Fatal("ReleaseModifiers must KeyUp Shift")
+	}
+}
+
 func TestTypeText_ASCII(t *testing.T) {
 	f := &fakeInputs{}
 	if err := TypeText(f, "Ab1!"); err != nil {

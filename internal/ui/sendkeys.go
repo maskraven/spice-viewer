@@ -46,6 +46,27 @@ func StandardSendKeys() []SendKeyPreset {
 	}
 }
 
+// modifierScancodes are keys that stick in the guest if a KeyUp is dropped
+// (e.g. after TypeText / paste inject). Stuck Shift + Ctrl+C becomes
+// Ctrl+Shift+C in Chrome → Inspect / DevTools.
+var modifierScancodes = []uint16{
+	scanLShift, scanRShift,
+	scanLCtrl, scanRCtrl,
+	scanLAlt, scanRAlt,
+	scanLGUI, scanRGUI,
+}
+
+// ReleaseModifiers force-sends KeyUp for all modifier scancodes (best-effort).
+// Safe to call even if the guest did not have them down.
+func ReleaseModifiers(inj KeyInjector) {
+	if inj == nil {
+		return
+	}
+	for _, sc := range modifierScancodes {
+		_ = inj.KeyUp(sc)
+	}
+}
+
 // InjectSequence presses keys in order then releases in reverse order.
 // This is the primitive behind CAD and the Send Keys menu.
 func InjectSequence(inj KeyInjector, keys []uint16) error {
@@ -67,6 +88,8 @@ func InjectSequence(inj KeyInjector, keys []uint16) error {
 		}
 	}
 	if first != nil {
+		// Best-effort: do not leave Shift/Ctrl down after a failed chord.
+		ReleaseModifiers(inj)
 		return fmt.Errorf("ui: inject sequence: %w", first)
 	}
 	return nil
@@ -107,16 +130,20 @@ func TypeTextBestEffort(inj KeyInjector, s string) (typed int, err error) {
 		return 0, fmt.Errorf("ui: type text: nil inputs")
 	}
 	s = foldClipboardText(s)
+	// Clear any leftover Shift/Ctrl from prior injects before typing.
+	ReleaseModifiers(inj)
 	for _, r := range s {
 		keys, cerr := asciiChord(r)
 		if cerr != nil {
 			continue // skip unsupported; do not abort whole paste
 		}
 		if ierr := InjectSequence(inj, keys); ierr != nil {
+			ReleaseModifiers(inj)
 			return typed, ierr
 		}
 		typed++
 	}
+	ReleaseModifiers(inj)
 	return typed, nil
 }
 
