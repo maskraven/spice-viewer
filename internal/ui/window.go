@@ -279,26 +279,20 @@ func (ui *sessionUI) onTypedRune(r rune) {
 	if ui.inputs == nil {
 		return
 	}
-	if r < 0x20 {
+	if r < 0x20 && r != '\t' && r != '\n' && r != '\r' && r != '\b' {
 		return
 	}
-	sc := letterScancode(r)
-	if sc == 0 {
-		sc = digitScancode(r)
-	}
-	if sc == 0 {
+	// Full US map (letters, digits, punctuation including '.').
+	keys, err := asciiChord(r)
+	if err != nil || len(keys) == 0 {
 		return
 	}
 	if !ui.grab.Active() {
 		ui.enterGrab()
 	}
-	// TypedRune is press-only; synthesize down/up for the guest.
-	if err := ui.inputs.KeyDown(sc); err != nil {
-		log.Printf("ui: key down (rune): %v", err)
-		return
-	}
-	if err := ui.inputs.KeyUp(sc); err != nil {
-		log.Printf("ui: key up (rune): %v", err)
+	// TypedRune is press-only; inject full chord (shift+key when needed).
+	if err := InjectSequence(ui.inputs, keys); err != nil {
+		log.Printf("ui: type rune %q: %v", r, err)
 	}
 }
 

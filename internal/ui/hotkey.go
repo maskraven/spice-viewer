@@ -326,7 +326,23 @@ func keyNameScancode(key string) uint16 {
 		if sc := letterScancode(r); sc != 0 {
 			return sc
 		}
-		return digitScancode(r)
+		if sc := digitScancode(r); sc != 0 {
+			return sc
+		}
+		// US punctuation: "." "," "/" "-" etc. (Fyne KeyPeriod = ".")
+		return punctScancode(r)
+	}
+	return 0
+}
+
+// punctScancode returns the base XT scancode for US-layout punctuation.
+// Shifted glyphs (e.g. '>') map to the same physical key as unshifted ('.').
+func punctScancode(r rune) uint16 {
+	if sc, ok := unshiftedPunct[r]; ok {
+		return sc
+	}
+	if sc, ok := shiftedDigitPunct[r]; ok {
+		return sc
 	}
 	return 0
 }

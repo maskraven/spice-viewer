@@ -157,6 +157,29 @@ func fyneKeyScancode(name fyne.KeyName) uint16 {
 		return scanF11
 	case fyne.KeyF12:
 		return scanF12
+	// US punctuation (physical keys; shift is a separate event).
+	case fyne.KeyPeriod:
+		return scanDot
+	case fyne.KeyComma:
+		return scanComma
+	case fyne.KeySlash:
+		return scanSlash
+	case fyne.KeyMinus:
+		return scanMinus
+	case fyne.KeyEqual:
+		return scanEqual
+	case fyne.KeySemicolon:
+		return scanSemicolon
+	case fyne.KeyApostrophe:
+		return scanQuote
+	case fyne.KeyBackTick:
+		return scanGrave
+	case fyne.KeyBackslash:
+		return scanBackslash
+	case fyne.KeyLeftBracket:
+		return scanLBracket
+	case fyne.KeyRightBracket:
+		return scanRBracket
 	default:
 		return keyNameScancode(fyneKeyName(name))
 	}

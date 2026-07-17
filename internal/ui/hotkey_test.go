@@ -6,8 +6,42 @@ package ui
 import (
 	"testing"
 
+	"fyne.io/fyne/v2"
+
 	"github.com/maskraven/virt-viewer/pkg/spice"
 )
+
+func TestKeyNameScancode_PeriodAndPunct(t *testing.T) {
+	// Regression: "." was letter/digit-only and returned 0 → not sent to guest.
+	if sc := keyNameScancode("."); sc != scanDot {
+		t.Fatalf("keyNameScancode(.) = %#x; want scanDot %#x", sc, scanDot)
+	}
+	if sc := fyneKeyScancode(fynePeriodKey()); sc != scanDot {
+		t.Fatalf("fyneKeyScancode(KeyPeriod) = %#x; want %#x", sc, scanDot)
+	}
+	for r, want := range map[rune]uint16{
+		',': scanComma,
+		'/': scanSlash,
+		'-': scanMinus,
+		'=': scanEqual,
+		';': scanSemicolon,
+		'\'': scanQuote,
+		'`': scanGrave,
+		'\\': scanBackslash,
+		'[': scanLBracket,
+		']': scanRBracket,
+		'>': scanDot, // shifted form of period key
+	} {
+		if sc := punctScancode(r); sc != want {
+			t.Errorf("punctScancode(%q) = %#x; want %#x", r, sc, want)
+		}
+	}
+}
+
+// fynePeriodKey avoids importing fyne in every assertion site name.
+func fynePeriodKey() fyne.KeyName {
+	return fyne.KeyPeriod
+}
 
 func TestParseChord_ProxmoxDefaults(t *testing.T) {
 	cases := []struct {
