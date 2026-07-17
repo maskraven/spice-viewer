@@ -455,6 +455,16 @@ func (c *Client) runMain(ctx context.Context, main net.Conn) error {
 	c.agent = agent.New(&lockedMain{c: c}, c)
 	var mainAck protocol.AckState
 
+	// spice-gtk channel-main: if MAIN_INIT.agent_connected is set, send
+	// SPICE_MSGC_MAIN_AGENT_START immediately. The server does not always
+	// re-send AGENT_CONNECTED when the guest agent was already up.
+	if init, ok := c.sess.MainInit(); ok && init.AgentConnected != 0 {
+		if err := c.startAgent(init.AgentTokens); err != nil {
+			log.Printf("spice: agent start from MAIN_INIT: %v", err)
+			c.emit(Event{Type: EventError, Err: err})
+		}
+	}
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -489,11 +499,9 @@ func (c *Client) runMain(ctx context.Context, main net.Conn) error {
 			if len(msg.Data) >= 4 {
 				tokens = uint32(msg.Data[0]) | uint32(msg.Data[1])<<8 | uint32(msg.Data[2])<<16 | uint32(msg.Data[3])<<24
 			}
-			if err := c.agent.HandleMainAgentConnected(tokens); err != nil {
+			if err := c.startAgent(tokens); err != nil {
 				log.Printf("spice: agent start: %v", err)
 				c.emit(Event{Type: EventError, Err: err})
-			} else {
-				c.emit(Event{Type: EventAgent, AgentActive: true})
 			}
 		case protocol.MsgMainAgentDisconnected:
 			if c.agent != nil {
@@ -502,8 +510,13 @@ func (c *Client) runMain(ctx context.Context, main net.Conn) error {
 			c.emit(Event{Type: EventAgent, AgentActive: false})
 		case protocol.MsgMainAgentData:
 			if c.agent != nil {
+				was := c.agent.Active()
 				if err := c.agent.HandleAgentData(msg.Data); err != nil {
 					log.Printf("spice: agent data: %v", err)
+				}
+				// Capabilities exchange completes Active(); notify UI then.
+				if !was && c.agent.Active() {
+					c.emit(Event{Type: EventAgent, AgentActive: true})
 				}
 			}
 		case protocol.MsgMainAgentToken:
@@ -518,6 +531,15 @@ func (c *Client) runMain(ctx context.Context, main net.Conn) error {
 			// NOTIFY, migrate, …
 		}
 	}
+}
+
+// startAgent sends AGENT_START + capability announce (spice-gtk agent_start).
+// Safe if already started (HandleMainAgentConnected is idempotent).
+func (c *Client) startAgent(tokens uint32) error {
+	if c == nil || c.agent == nil {
+		return fmt.Errorf("spice: agent not ready")
+	}
+	return c.agent.HandleMainAgentConnected(tokens)
 }
 
 type lockedMain struct{ c *Client }
