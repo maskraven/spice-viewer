@@ -19,6 +19,13 @@
 // Phase 1 does not auto-reconnect ticket/password sessions. On disconnect,
 // open a fresh connection file and call Connect again.
 //
+// Phase 2 (desktop comfort):
+//
+//   - vdagent clipboard: SetHostClipboard, RequestGuestClipboard, EventClipboard
+//   - guest resize: SetGuestDisplaySize (monitors config)
+//   - codecs: raw, LZ, Quic, JPEG, MJPEG streams (display channel)
+//   - playback: Drivers.Playback (RAW S16LE); Nil → NullPlayback
+//
 // The context passed to Connect only bounds dial/open; session lifetime after
 // Connect returns is ended with Client.Close.
 //

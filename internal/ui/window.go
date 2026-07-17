@@ -230,6 +230,24 @@ func (ui *sessionUI) updateScaleHint() {
 	ui.view.SetScaleHint(ui.win.Canvas().Scale())
 }
 
+// requestGuestResize asks the guest (via vdagent) to match the current pad
+// size in logical pixels. Best-effort; ignored when agent is offline.
+func (ui *sessionUI) requestGuestResize() {
+	if ui.client == nil || !ui.client.AgentActive() || ui.pad == nil {
+		return
+	}
+	sz := ui.pad.Size()
+	// Fyne sizes are logical; request integer guest dimensions.
+	w, h := uint32(sz.Width+0.5), uint32(sz.Height+0.5)
+	if w < 320 || h < 200 || w > 8192 || h > 8192 {
+		return
+	}
+	if err := ui.client.SetGuestDisplaySize(w, h); err != nil {
+		// Common when agent lacks monitors-config; keep quiet at debug level.
+		log.Printf("ui: guest resize %dx%d: %v", w, h, err)
+	}
+}
+
 // mousePad is a desktop mouse-aware host for the guest view.
 type mousePad struct {
 	widget.BaseWidget
@@ -262,6 +280,8 @@ func (p *mousePad) MinSize() fyne.Size {
 func (p *mousePad) Resize(size fyne.Size) {
 	p.BaseWidget.Resize(size)
 	p.ui.updateScaleHint()
+	// Debounce is natural (many resize events); agent ignores if unchanged.
+	p.ui.requestGuestResize()
 }
 
 func (p *mousePad) Cursor() desktop.Cursor {
