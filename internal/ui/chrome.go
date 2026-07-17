@@ -19,10 +19,45 @@ import (
 // Auto-hide control chrome (RDP-style top-center pill).
 const (
 	chromeHitZoneY  float32 = 10 // host-only strip at top of guest surface
-	chromeTopMargin float32 = 6
+	chromeTopMargin float32 = 4
 	chromePeekDelay         = 2 * time.Second
 	chromeHideDelay         = 1 * time.Second
 )
+
+// chromeTheme shrinks padding, icons, and text for a compact control pill.
+type chromeTheme struct {
+	fyne.Theme
+}
+
+func (t chromeTheme) Size(n fyne.ThemeSizeName) float32 {
+	base := t.Theme.Size(n)
+	switch n {
+	case theme.SizeNameText, theme.SizeNameCaptionText:
+		if base > 10 {
+			return 10
+		}
+		return base
+	case theme.SizeNameInlineIcon:
+		if base > 12 {
+			return 12
+		}
+		return base
+	case theme.SizeNameInnerPadding:
+		return 2
+	case theme.SizeNamePadding:
+		return 2
+	case theme.SizeNameInputBorder, theme.SizeNameInputRadius:
+		return 2
+	case theme.SizeNameScrollBarSmall:
+		return base
+	default:
+		// Button height is driven by padding+icon+text; keep other sizes modest.
+		if n == theme.SizeNameSeparatorThickness {
+			return base
+		}
+		return base
+	}
+}
 
 // inChromeHitZone reports whether a pad-local Y is inside the top reveal strip.
 func inChromeHitZone(y float32) bool {
@@ -125,53 +160,55 @@ func (p *chromePill) MouseOut() {
 
 var _ desktop.Hoverable = (*chromePill)(nil)
 
+// chromeIconBtn is a compact LowImportance icon+short-label button for the pill.
+func chromeIconBtn(label string, icon fyne.Resource, fn func()) *widget.Button {
+	b := widget.NewButtonWithIcon(label, icon, fn)
+	b.Importance = widget.LowImportance
+	return b
+}
+
 // installChrome builds the overlay stack object and wires ui.chrome.
 // Returns the overlay CanvasObject to place above the mouse pad in a Stack.
+// CAD is not on the pill (use Send Keys / Ctrl+Alt+Ins hotkey).
 func (ui *sessionUI) installChrome() fyne.CanvasObject {
-	pinBtn := widget.NewButtonWithIcon("Pin", theme.ViewRestoreIcon(), func() {
+	pinBtn := chromeIconBtn("", theme.ViewRestoreIcon(), func() {
 		ui.toggleChromePin()
 	})
-	pinBtn.Importance = widget.LowImportance
 
-	cadBtn := widget.NewButtonWithIcon("CAD", theme.ConfirmIcon(), func() {
-		ui.chromePointerEnter()
-		ui.sendKeys(SendKeyPreset{Label: "Ctrl+Alt+Del", Keys: CADScancodes()})
-	})
-	ungrabBtn := widget.NewButtonWithIcon("Ungrab", theme.CancelIcon(), func() {
+	ungrabBtn := chromeIconBtn("Ungrab", theme.CancelIcon(), func() {
 		ui.chromePointerEnter()
 		ui.releaseGrab()
 		ui.refreshStatus()
 	})
-	fsBtn := widget.NewButtonWithIcon("Fullscreen", theme.ViewFullScreenIcon(), func() {
+	fsBtn := chromeIconBtn("Full", theme.ViewFullScreenIcon(), func() {
 		ui.chromePointerEnter()
 		ui.toggleFullscreen()
 		ui.refreshStatus()
 	})
-	copyBtn := widget.NewButtonWithIcon("Copy", theme.ContentCopyIcon(), func() {
+	copyBtn := chromeIconBtn("Copy", theme.ContentCopyIcon(), func() {
 		ui.chromePointerEnter()
 		ui.copyFromGuest()
 	})
-	pasteBtn := widget.NewButtonWithIcon("Paste", theme.ContentPasteIcon(), func() {
+	pasteBtn := chromeIconBtn("Paste", theme.ContentPasteIcon(), func() {
 		ui.chromePointerEnter()
 		ui.pasteToGuest()
 	})
-	typeBtn := widget.NewButtonWithIcon("Type…", theme.DocumentCreateIcon(), func() {
+	typeBtn := chromeIconBtn("Type", theme.DocumentCreateIcon(), func() {
 		ui.chromePointerEnter()
 		ui.showTypeTextDialog()
 	})
 
 	var sendBtn *widget.Button
-	sendBtn = widget.NewButton("Send Keys ▾", func() {
+	sendBtn = chromeIconBtn("Keys ▾", theme.MailSendIcon(), func() {
 		ui.showChromeSendKeysMenu(sendBtn)
 	})
 	var moreBtn *widget.Button
-	moreBtn = widget.NewButton("More ▾", func() {
+	moreBtn = chromeIconBtn("···", theme.MoreHorizontalIcon(), func() {
 		ui.showChromeMoreMenu(moreBtn)
 	})
 
 	row := container.NewHBox(
 		pinBtn,
-		cadBtn,
 		ungrabBtn,
 		fsBtn,
 		copyBtn,
@@ -181,16 +218,17 @@ func (ui *sessionUI) installChrome() fyne.CanvasObject {
 		moreBtn,
 	)
 
-	bg := canvas.NewRectangle(color.NRGBA{R: 28, G: 28, B: 32, A: 210})
-	bg.CornerRadius = 8
-	bg.StrokeColor = color.NRGBA{R: 80, G: 80, B: 90, A: 180}
+	bg := canvas.NewRectangle(color.NRGBA{R: 28, G: 28, B: 32, A: 220})
+	bg.CornerRadius = 5
+	bg.StrokeColor = color.NRGBA{R: 80, G: 80, B: 90, A: 160}
 	bg.StrokeWidth = 1
 
-	// Stack: background sized to content via a padded HBox wrapper.
+	// Tight pad + compact theme (small icons/text/padding).
 	padded := container.NewPadded(row)
 	pillBody := container.NewStack(bg, padded)
+	compact := container.NewThemeOverride(pillBody, chromeTheme{Theme: theme.Current()})
 
-	pill := newChromePill(ui, pillBody)
+	pill := newChromePill(ui, compact)
 	overlay := container.New(&topCenterLayout{topMargin: chromeTopMargin}, pill)
 
 	ui.chrome = &controlChrome{
@@ -224,6 +262,9 @@ func (ui *sessionUI) showChromeMoreMenu(anchor fyne.CanvasObject) {
 		return
 	}
 	items := []*fyne.MenuItem{
+		fyne.NewMenuItem("Ctrl+Alt+Del", func() {
+			ui.sendKeys(SendKeyPreset{Label: "Ctrl+Alt+Del", Keys: CADScancodes()})
+		}),
 		fyne.NewMenuItem("Grab keyboard & mouse", func() {
 			ui.enterGrab()
 			ui.refreshStatus()
@@ -421,12 +462,13 @@ func (ui *sessionUI) toggleChromePin() {
 	c.mu.Unlock()
 
 	if c.pinBtn != nil {
+		// Icon-only pin control: high importance when locked visible.
 		if pinned {
-			c.pinBtn.SetText("Unpin")
 			c.pinBtn.Importance = widget.HighImportance
+			c.pinBtn.SetIcon(theme.VisibilityIcon())
 		} else {
-			c.pinBtn.SetText("Pin")
 			c.pinBtn.Importance = widget.LowImportance
+			c.pinBtn.SetIcon(theme.ViewRestoreIcon())
 		}
 		c.pinBtn.Refresh()
 	}

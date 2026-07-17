@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
@@ -91,38 +92,88 @@ func newStatusLabel(text string) *widget.Label {
 	l.Truncation = fyne.TextTruncateEllipsis
 	l.Wrapping = fyne.TextWrapOff
 	l.SizeName = theme.SizeNameCaptionText
-	l.Importance = widget.LowImportance
+	// MediumImportance: LowImportance was nearly invisible on dark guest pixels
+	// when the strip was too thin / poorly contrasted.
+	l.Importance = widget.MediumImportance
 	return l
 }
 
-// statusBar is a hairline + caption strip forced to roughly one text line height.
-// Plain Label MinSize is padded tall; Border would reserve that for the bottom.
+// statusBar is a hairline + single caption line. Height matches text so glyphs
+// are never clipped (an earlier forced MinSize was shorter than the label).
 type statusBar struct {
 	widget.BaseWidget
 	label *widget.Label
-	sep   *widget.Separator
+	sep   *canvas.Rectangle
 }
 
 func newStatusBar(label *widget.Label) *statusBar {
+	sep := canvas.NewRectangle(theme.Color(theme.ColorNameSeparator))
 	s := &statusBar{
 		label: label,
-		sep:   widget.NewSeparator(),
+		sep:   sep,
 	}
 	s.ExtendBaseWidget(s)
 	return s
 }
 
 func (s *statusBar) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(container.NewBorder(s.sep, nil, nil, nil, s.label))
+	s.ExtendBaseWidget(s)
+	return &statusBarRenderer{bar: s, objects: []fyne.CanvasObject{s.sep, s.label}}
 }
 
 func (s *statusBar) MinSize() fyne.Size {
 	s.ExtendBaseWidget(s)
 	th := s.Theme()
-	// Caption text + small vertical pad + separator thickness ≈ one status line.
-	h := th.Size(theme.SizeNameCaptionText)*1.35 +
-		th.Size(theme.SizeNameSeparatorThickness) + 4
-	return fyne.NewSize(32, h)
+	sepH := th.Size(theme.SizeNameSeparatorThickness)
+	if sepH < 1 {
+		sepH = 1
+	}
+	// Caption line + small pad so descenders are never clipped.
+	textH := th.Size(theme.SizeNameCaptionText) + th.Size(theme.SizeNameInnerPadding)
+	if textH < 16 {
+		textH = 16
+	}
+	return fyne.NewSize(48, sepH+textH)
+}
+
+// statusBarRenderer lays out separator + label without Border padding bloat.
+type statusBarRenderer struct {
+	bar     *statusBar
+	objects []fyne.CanvasObject
+}
+
+func (r *statusBarRenderer) Destroy() {}
+func (r *statusBarRenderer) Objects() []fyne.CanvasObject {
+	return r.objects
+}
+
+func (r *statusBarRenderer) Layout(size fyne.Size) {
+	th := r.bar.Theme()
+	sepH := th.Size(theme.SizeNameSeparatorThickness)
+	if sepH < 1 {
+		sepH = 1
+	}
+	r.bar.sep.FillColor = theme.Color(theme.ColorNameSeparator)
+	r.bar.sep.Resize(fyne.NewSize(size.Width, sepH))
+	r.bar.sep.Move(fyne.NewPos(0, 0))
+	padX := float32(6)
+	r.bar.label.Resize(fyne.NewSize(size.Width-padX*2, size.Height-sepH))
+	r.bar.label.Move(fyne.NewPos(padX, sepH))
+}
+
+func (r *statusBarRenderer) MinSize() fyne.Size {
+	return r.bar.MinSize()
+}
+
+func (r *statusBarRenderer) Refresh() {
+	if r.bar.sep != nil {
+		r.bar.sep.FillColor = theme.Color(theme.ColorNameSeparator)
+		r.bar.sep.Refresh()
+	}
+	if r.bar.label != nil {
+		r.bar.label.Refresh()
+	}
+	canvas.Refresh(r.bar)
 }
 
 // AttachClient sets the live client/inputs after Connect.

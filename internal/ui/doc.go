@@ -8,9 +8,10 @@
 //
 //   - Main menu: File, View, Send Keys, Help
 //   - Send Keys: Ctrl+Alt+Del, Ctrl+Alt+Fn, Super, Alt+Tab, Type text… (US QWERTY)
-//   - Control chrome: RDP-style top-center auto-hide pill (Pin · CAD · Ungrab ·
-//     Fullscreen · Copy · Paste · Type… · Send Keys · More); Ctrl+Alt+M toggles
-//   - Status bar: compact single line — title · grab · mouse mode · agent
+//   - Control chrome: compact top-center auto-hide pill (Pin · Ungrab · Full ·
+//     Copy · Paste · Type · Keys · More); no CAD on pill (Send Keys / hotkey);
+//     Ctrl+Alt+M toggles
+//   - Status bar: one caption line — title · grab · mouse mode · agent
 //   - Clipboard: chrome Copy/Paste via vdagent; TypeText fallback when agent offline
 //   - secure-attention chord → guest Ctrl+Alt+Del (not the local chord keys)
 //   - release-cursor → ungrab; toggle-fullscreen → window fullscreen
