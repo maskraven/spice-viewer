@@ -5,7 +5,6 @@ package channel
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -147,6 +146,7 @@ type Playback struct {
 	mu      sync.Mutex
 	unknown map[uint16]int
 	lastErr error
+	ack     protocol.AckState
 
 	// Stream state (protected by mu).
 	mode      uint16
@@ -224,6 +224,9 @@ func (p *Playback) Run(ctx context.Context) error {
 			}
 			log.Printf("channel/playback: read error (degraded): %v", err)
 			return err
+		}
+		if err := p.ack.AfterRead(p.conn); err != nil {
+			log.Printf("channel/playback: ack: %v", err)
 		}
 		if err := p.HandleMessage(msg.Type, msg.Data); err != nil {
 			log.Printf("channel/playback: handle type %d: %v", msg.Type, err)
@@ -316,13 +319,10 @@ func (p *Playback) UnknownCounts() map[uint16]int {
 }
 
 func (p *Playback) handleSetAck(data []byte) error {
-	if len(data) < 8 || p.conn == nil {
+	if p.conn == nil {
 		return nil
 	}
-	gen := binary.LittleEndian.Uint32(data[0:4])
-	var body [4]byte
-	binary.LittleEndian.PutUint32(body[:], gen)
-	return protocol.WriteMessage(p.conn, protocol.MsgcAckSync, body[:])
+	return p.ack.OnSetAck(p.conn, data)
 }
 
 func (p *Playback) handlePing(data []byte) error {

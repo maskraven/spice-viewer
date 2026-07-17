@@ -144,6 +144,7 @@ type Cursor struct {
 	cache   map[uint64]cachedShape
 	// lastErr is the most recent non-fatal decode error (for diagnostics).
 	lastErr error
+	ack     protocol.AckState
 }
 
 // NewCursor wraps a linked cursor-channel connection and a Driver.
@@ -196,6 +197,9 @@ func (c *Cursor) Run(ctx context.Context) error {
 			// Read framing errors: log and stop this channel only.
 			log.Printf("channel/cursor: read error (degraded): %v", err)
 			return err
+		}
+		if err := c.ack.AfterRead(c.conn); err != nil {
+			log.Printf("channel/cursor: ack: %v", err)
 		}
 		if err := c.HandleMessage(msg.Type, msg.Data); err != nil {
 			// Non-fatal: keep reading so one bad shape cannot kill the channel loop.
@@ -296,13 +300,10 @@ func (c *Cursor) UnknownCounts() map[uint16]int {
 }
 
 func (c *Cursor) handleSetAck(data []byte) error {
-	if len(data) < 8 || c.conn == nil {
+	if c.conn == nil {
 		return nil
 	}
-	gen := binary.LittleEndian.Uint32(data[0:4])
-	var body [4]byte
-	binary.LittleEndian.PutUint32(body[:], gen)
-	return protocol.WriteMessage(c.conn, protocol.MsgcAckSync, body[:])
+	return c.ack.OnSetAck(c.conn, data)
 }
 
 func (c *Cursor) handlePing(data []byte) error {

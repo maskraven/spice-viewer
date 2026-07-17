@@ -109,6 +109,7 @@ type Display struct {
 	drawSkips      int            // other soft-skipped draw/surface ops
 	streams        map[uint32]*displayStream
 	imgCache       *imageCache
+	ack            protocol.AckState
 	initSent       bool
 }
 
@@ -187,6 +188,10 @@ func (d *Display) Run(ctx context.Context) error {
 			}
 			return err
 		}
+		// spice-gtk: count every inbound message toward ACK window *before* handle.
+		if err := d.ack.AfterRead(d.conn); err != nil {
+			return fmt.Errorf("channel: display ack: %w", err)
+		}
 		// HandleMessage soft-fails draw errors; only nil-conn / write path returns fatal.
 		if err := d.HandleMessage(msg.Type, msg.Data); err != nil {
 			return err
@@ -259,10 +264,45 @@ func (d *Display) HandleMessage(typ uint16, data []byte) error {
 	case protocol.MsgDisplayStreamDestroyAll:
 		d.handleStreamDestroyAll()
 		return nil
+	case protocol.MsgDisplayInvalList:
+		d.handleInvalList(data)
+		return nil
+	case protocol.MsgDisplayInvalAllPixmaps:
+		d.mu.Lock()
+		d.imgCache = newImageCache(512)
+		d.mu.Unlock()
+		return nil
+	case protocol.MsgDisplayInvalPalette, protocol.MsgDisplayInvalAllPalettes:
+		return nil // no palette cache yet
 	default:
 		// Allowlisted but not yet implemented (should not happen).
 		d.noteUnknown(typ)
 		return nil
+	}
+}
+
+// handleInvalList removes cached pixmaps by id (SPICE_MSG_DISPLAY_INVAL_LIST).
+// Wire: uint16 count, then {type u8, id u64} * count (spice-gtk ResourceList).
+func (d *Display) handleInvalList(data []byte) {
+	if len(data) < 2 {
+		return
+	}
+	n := int(binary.LittleEndian.Uint16(data[0:2]))
+	off := 2
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := 0; i < n; i++ {
+		if off+1+8 > len(data) {
+			return
+		}
+		typ := data[off]
+		off++
+		id := binary.LittleEndian.Uint64(data[off : off+8])
+		off += 8
+		// SPICE_RES_TYPE_PIXMAP = 0
+		if typ == 0 && d.imgCache != nil {
+			delete(d.imgCache.m, id)
+		}
 	}
 }
 
@@ -356,14 +396,11 @@ func (d *Display) DrawSkipCount() int {
 }
 
 func (d *Display) handleSetAck(data []byte) error {
-	// SpiceMsgSetAck: generation u32, window u32 — reply with MsgcAckSync(generation)
-	if len(data) < 8 || d.conn == nil {
+	// SpiceMsgSetAck: generation u32, window u32 — ACK_SYNC + enable windowed ACK.
+	if d.conn == nil {
 		return nil
 	}
-	gen := binary.LittleEndian.Uint32(data[0:4])
-	var body [4]byte
-	binary.LittleEndian.PutUint32(body[:], gen)
-	return protocol.WriteMessage(d.conn, protocol.MsgcAckSync, body[:])
+	return d.ack.OnSetAck(d.conn, data)
 }
 
 func (d *Display) handlePing(data []byte) error {
@@ -494,7 +531,6 @@ func (d *Display) handleDrawCopy(data []byte) {
 	// Issue 7: require room for at least a SpiceImage descriptor.
 	if int(imgPtr) >= len(data) || len(data)-int(imgPtr) < protocol.SpiceImageDescSize {
 		d.noteDrawSkip(fmt.Sprintf("DRAW_COPY img_ptr %d invalid for body %d", imgPtr, len(data)))
-		d.softBlackFill(base)
 		return
 	}
 
@@ -511,7 +547,8 @@ func (d *Display) handleDrawCopy(data []byte) {
 				d.noteDrawSkip(fmt.Sprintf("DRAW_COPY image: %v", err))
 			}
 		}
-		d.softBlackFill(base)
+		// spice-gtk leaves previous pixels on draw failure — do NOT black-fill
+		// (black fill causes mouse trails and permanent damage).
 		return
 	}
 
@@ -522,7 +559,7 @@ func (d *Display) handleDrawCopy(data []byte) {
 	}
 	if err := d.comp.Copy(base.SurfaceID, base.Box, img, srcOrigin, base.Clips); err != nil {
 		d.noteDrawSkip(err.Error())
-		d.softBlackFill(base)
+		// No softBlackFill — preserve last good pixels (spice-gtk behavior).
 	}
 }
 
@@ -601,12 +638,12 @@ func surfaceToRGBA(s *display.Surface) *codec.RGBA {
 	return &codec.RGBA{Width: s.Width, Height: s.Height, Stride: s.Stride, Pix: pix}
 }
 
-// softBlackFill paints dest black when a COPY is skipped (design: prefer black fill).
+// softBlackFill is retained for tests that want explicit black fill; production
+// DRAW_COPY skips no longer call it (black trails). Prefer leaving prior pixels.
 func (d *Display) softBlackFill(base displayBase) {
 	if base.Box.Empty() {
 		return
 	}
-	// Ignore fill errors (missing surface, bounds) — already soft path.
 	_ = d.comp.Fill(base.SurfaceID, base.Box, opaqueBlack, base.Clips)
 }
 

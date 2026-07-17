@@ -360,6 +360,7 @@ func (c *Client) runMain(ctx context.Context, main net.Conn) error {
 	c.main = main
 	c.mainMu.Unlock()
 	c.agent = agent.New(&lockedMain{c: c}, c)
+	var mainAck protocol.AckState
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -375,11 +376,13 @@ func (c *Client) runMain(ctx context.Context, main net.Conn) error {
 			}
 			return err
 		}
+		// spice-gtk channel ACK window (required or server stops after N msgs).
+		if err := mainAck.AfterRead(&lockedMain{c: c}); err != nil {
+			return err
+		}
 		switch msg.Type {
 		case protocol.MsgSetAck:
-			if len(msg.Data) >= 4 {
-				_ = c.writeMain(protocol.MsgcAckSync, msg.Data[0:4])
-			}
+			_ = mainAck.OnSetAck(&lockedMain{c: c}, msg.Data)
 		case protocol.MsgPing:
 			if len(msg.Data) >= 12 {
 				_ = c.writeMain(protocol.MsgcPong, msg.Data[:12])

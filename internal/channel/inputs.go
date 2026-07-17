@@ -54,6 +54,8 @@ type Inputs struct {
 	pendingX       uint32
 	pendingY       uint32
 	havePendingPos bool
+
+	ack protocol.AckState
 }
 
 // NewInputs builds an Inputs helper writing mini-header framed messages to w.
@@ -183,6 +185,16 @@ func (in *Inputs) HandleMessage(msg protocol.Message) error {
 		return fmt.Errorf("channel: nil Inputs")
 	}
 	switch msg.Type {
+	case protocol.MsgSetAck:
+		if in.w == nil {
+			return nil
+		}
+		return in.ack.OnSetAck(in.w, msg.Data)
+	case protocol.MsgPing:
+		if in.w == nil {
+			return nil
+		}
+		return protocol.WriteMessage(in.w, protocol.MsgcPong, msg.Data)
 	case protocol.MsgInputsInit, protocol.MsgInputsKeyModifiers:
 		mods, err := protocol.DecodeKeyModifiers(msg.Data)
 		if err != nil {
@@ -462,6 +474,16 @@ func (in *Inputs) Run(ctx context.Context, r io.Reader) error {
 				return ctx.Err()
 			}
 			return err
+		}
+		// Writer for acks: Inputs.w is the channel conn.
+		if w, ok := r.(io.Writer); ok {
+			if err := in.ack.AfterRead(w); err != nil {
+				return err
+			}
+		} else if in.w != nil {
+			if err := in.ack.AfterRead(in.w); err != nil {
+				return err
+			}
 		}
 		if err := in.HandleMessage(msg); err != nil {
 			return err
