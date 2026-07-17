@@ -24,7 +24,8 @@ const (
 	chromeHideDelay         = 1 * time.Second
 )
 
-// chromeTheme shrinks padding, icons, and text for a compact control pill.
+// chromeTheme sizes the control pill a notch below default Fyne chrome and
+// forces light-on-dark labels (white text/icons on the dark pill).
 type chromeTheme struct {
 	fyne.Theme
 }
@@ -33,29 +34,41 @@ func (t chromeTheme) Size(n fyne.ThemeSizeName) float32 {
 	base := t.Theme.Size(n)
 	switch n {
 	case theme.SizeNameText, theme.SizeNameCaptionText:
-		if base > 10 {
-			return 10
-		}
-		return base
+		return 12
 	case theme.SizeNameInlineIcon:
-		if base > 12 {
-			return 12
-		}
-		return base
+		return 16
 	case theme.SizeNameInnerPadding:
-		return 2
+		return 4
 	case theme.SizeNamePadding:
-		return 2
+		return 4
 	case theme.SizeNameInputBorder, theme.SizeNameInputRadius:
-		return 2
-	case theme.SizeNameScrollBarSmall:
-		return base
+		return 3
 	default:
-		// Button height is driven by padding+icon+text; keep other sizes modest.
-		if n == theme.SizeNameSeparatorThickness {
-			return base
-		}
 		return base
+	}
+}
+
+func (t chromeTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+	// White labels/icons on the dark pill; soft hover/press fills.
+	// Fyne buttons use ColorNameForeground for label text and ColorNameButton
+	// for the face (MediumImportance). Keep faces transparent so the pill shows.
+	switch n {
+	case theme.ColorNameForeground,
+		theme.ColorNamePrimary,
+		theme.ColorNamePlaceHolder,
+		theme.ColorNameHyperlink:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	case theme.ColorNameDisabled:
+		// Still readable white-ish; not grey-on-black.
+		return color.NRGBA{R: 230, G: 230, B: 235, A: 255}
+	case theme.ColorNameButton, theme.ColorNameInputBackground, theme.ColorNameBackground:
+		return color.NRGBA{R: 0, G: 0, B: 0, A: 0}
+	case theme.ColorNameHover:
+		return color.NRGBA{R: 70, G: 72, B: 82, A: 255}
+	case theme.ColorNamePressed:
+		return color.NRGBA{R: 50, G: 52, B: 62, A: 255}
+	default:
+		return t.Theme.Color(n, v)
 	}
 }
 
@@ -160,16 +173,17 @@ func (p *chromePill) MouseOut() {
 
 var _ desktop.Hoverable = (*chromePill)(nil)
 
-// chromeIconBtn is a compact LowImportance icon+short-label button for the pill.
+// chromeIconBtn is a medium pill button with white themed labels (see chromeTheme).
 func chromeIconBtn(label string, icon fyne.Resource, fn func()) *widget.Button {
 	b := widget.NewButtonWithIcon(label, icon, fn)
-	b.Importance = widget.LowImportance
+	// MediumImportance: High is loud blue; Low greys out text on dark bg.
+	b.Importance = widget.MediumImportance
 	return b
 }
 
 // installChrome builds the overlay stack object and wires ui.chrome.
 // Returns the overlay CanvasObject to place above the mouse pad in a Stack.
-// CAD is not on the pill (use Send Keys / Ctrl+Alt+Ins hotkey).
+// CAD lives under Keys ▾ (and the secure-attention hotkey), not on the pill/More.
 func (ui *sessionUI) installChrome() fyne.CanvasObject {
 	pinBtn := chromeIconBtn("", theme.ViewRestoreIcon(), func() {
 		ui.toggleChromePin()
@@ -218,17 +232,17 @@ func (ui *sessionUI) installChrome() fyne.CanvasObject {
 		moreBtn,
 	)
 
-	bg := canvas.NewRectangle(color.NRGBA{R: 28, G: 28, B: 32, A: 220})
-	bg.CornerRadius = 5
-	bg.StrokeColor = color.NRGBA{R: 80, G: 80, B: 90, A: 160}
+	bg := canvas.NewRectangle(color.NRGBA{R: 28, G: 28, B: 32, A: 230})
+	bg.CornerRadius = 6
+	bg.StrokeColor = color.NRGBA{R: 90, G: 90, B: 100, A: 180}
 	bg.StrokeWidth = 1
 
-	// Tight pad + compact theme (small icons/text/padding).
+	// Slightly roomier pad + white-on-dark theme.
 	padded := container.NewPadded(row)
 	pillBody := container.NewStack(bg, padded)
-	compact := container.NewThemeOverride(pillBody, chromeTheme{Theme: theme.Current()})
+	themed := container.NewThemeOverride(pillBody, chromeTheme{Theme: theme.Current()})
 
-	pill := newChromePill(ui, compact)
+	pill := newChromePill(ui, themed)
 	overlay := container.New(&topCenterLayout{topMargin: chromeTopMargin}, pill)
 
 	ui.chrome = &controlChrome{
@@ -261,10 +275,8 @@ func (ui *sessionUI) showChromeMoreMenu(anchor fyne.CanvasObject) {
 	if ui.win == nil {
 		return
 	}
+	// CAD is already first in Keys ▾ (StandardSendKeys); do not duplicate here.
 	items := []*fyne.MenuItem{
-		fyne.NewMenuItem("Ctrl+Alt+Del", func() {
-			ui.sendKeys(SendKeyPreset{Label: "Ctrl+Alt+Del", Keys: CADScancodes()})
-		}),
 		fyne.NewMenuItem("Grab keyboard & mouse", func() {
 			ui.enterGrab()
 			ui.refreshStatus()
@@ -462,12 +474,11 @@ func (ui *sessionUI) toggleChromePin() {
 	c.mu.Unlock()
 
 	if c.pinBtn != nil {
-		// Icon-only pin control: high importance when locked visible.
+		// Icon-only pin: keep medium importance (white labels); swap icon when pinned.
+		c.pinBtn.Importance = widget.MediumImportance
 		if pinned {
-			c.pinBtn.Importance = widget.HighImportance
 			c.pinBtn.SetIcon(theme.VisibilityIcon())
 		} else {
-			c.pinBtn.Importance = widget.LowImportance
 			c.pinBtn.SetIcon(theme.ViewRestoreIcon())
 		}
 		c.pinBtn.Refresh()

@@ -92,8 +92,8 @@ func newStatusLabel(text string) *widget.Label {
 	l.Truncation = fyne.TextTruncateEllipsis
 	l.Wrapping = fyne.TextWrapOff
 	l.SizeName = theme.SizeNameCaptionText
-	// MediumImportance: LowImportance was nearly invisible on dark guest pixels
-	// when the strip was too thin / poorly contrasted.
+	l.Alignment = fyne.TextAlignCenter
+	// MediumImportance keeps text readable on the status strip.
 	l.Importance = widget.MediumImportance
 	return l
 }
@@ -156,8 +156,14 @@ func (r *statusBarRenderer) Layout(size fyne.Size) {
 	r.bar.sep.FillColor = theme.Color(theme.ColorNameSeparator)
 	r.bar.sep.Resize(fyne.NewSize(size.Width, sepH))
 	r.bar.sep.Move(fyne.NewPos(0, 0))
-	padX := float32(6)
-	r.bar.label.Resize(fyne.NewSize(size.Width-padX*2, size.Height-sepH))
+	// Full-width label + TextAlignCenter → status text centered horizontally.
+	padX := float32(8)
+	labelH := size.Height - sepH
+	if labelH < 1 {
+		labelH = 1
+	}
+	r.bar.label.Alignment = fyne.TextAlignCenter
+	r.bar.label.Resize(fyne.NewSize(size.Width-padX*2, labelH))
 	r.bar.label.Move(fyne.NewPos(padX, sepH))
 }
 
