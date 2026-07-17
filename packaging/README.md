@@ -1,25 +1,144 @@
 # Packaging
 
+Product packaging for **remote-viewer** on Linux, macOS, and Windows.
+
+| Platform | Artifacts | How to build |
+|----------|-----------|--------------|
+| **Linux** | `tar.gz`, **deb**, **rpm** | `scripts/linux/build-product.sh` or GoReleaser on Linux |
+| **macOS** | **`.app`**, **`.dmg`**, app zip | `scripts/macos/build-product.sh` on a Mac |
+| **Windows** | **`.exe`** (GUI), **zip**, optional **NSIS setup** | `scripts/windows/build-product.ps1` on Windows |
+
+CI: [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds all three on tag push (`v*`) and attaches a **draft** GitHub Release.
+
+**Important:** Fyne and OS codecs need **native** `CGO_ENABLED=1` builds:
+
+- macOS H.264 → VideoToolbox (build on macOS)
+- Windows H.264 → Media Foundation (build on Windows)
+- Linux H.264 → system **FFmpeg** on `PATH` (never bundled)
+
+Do not treat a pure cross-compile from another OS as a full product binary.
+
+---
+
 ## Linux desktop integration
 
-- `remote-viewer.desktop` — FreeDesktop application entry; associates `*.vv` via MIME.
-- `remote-viewer.xml` — MIME type `application/x-virt-viewer` for `.vv` files.
+| File | Role |
+|------|------|
+| `remote-viewer.desktop` | FreeDesktop app entry; `MimeType=application/x-virt-viewer` |
+| `remote-viewer.xml` | MIME type for `*.vv` |
+| `icons/hicolor/*/apps/remote-viewer.png` | Theme icons (`Icon=remote-viewer`) |
+| `scripts/postinstall.sh` / `postremove.sh` | Update desktop/MIME/icon caches (nFPM) |
 
-Install (manual):
+### Manual install (tarball)
 
 ```bash
-sudo install -Dm644 remote-viewer.desktop /usr/share/applications/
-sudo install -Dm644 remote-viewer.xml /usr/share/mime/packages/
+sudo install -Dm755 remote-viewer /usr/bin/remote-viewer
+sudo install -Dm644 packaging/remote-viewer.desktop /usr/share/applications/
+sudo install -Dm644 packaging/remote-viewer.xml /usr/share/mime/packages/
+sudo cp -a packaging/icons/hicolor/* /usr/share/icons/hicolor/
 sudo update-desktop-database
 sudo update-mime-database /usr/share/mime
+gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
 ```
 
-## Releases
+Prefer this client as the default for `.vv`:
 
-See `.goreleaser.yaml` at repo root. Example:
+```bash
+xdg-mime default remote-viewer.desktop application/x-virt-viewer
+```
+
+### deb / rpm
+
+Package name: **`remote-viewer-spice`** (binary still `remote-viewer`).
+
+- Declares a **conflict** with distro package `virt-viewer` (same `/usr/bin/remote-viewer` path).
+- **Recommends** `ffmpeg` for H.264 (soft-skip without it).
+- Runtime deps: OpenGL + X11/Wayland client libraries (see `.goreleaser.yaml` nFPM).
+
+```bash
+# On Linux with CGO deps + goreleaser:
+VERSION=v0.2.0 ./scripts/linux/build-product.sh
+# or:
+goreleaser release --snapshot --clean
+```
+
+---
+
+## macOS (`.app` + `.dmg`)
+
+| File | Role |
+|------|------|
+| `macos/Info.plist.in` | Bundle metadata + **`.vv` UTI** / document type |
+| `macos/AppIcon.icns` | App icon |
+| `macos/entitlements.plist` | Hardened-runtime exceptions (for future notarization) |
+| `scripts/macos/make-app.sh` | Binary → `Remote Viewer.app` |
+| `scripts/macos/make-dmg.sh` | App → UDZO DMG with `/Applications` link |
+| `scripts/macos/build-product.sh` | Universal arm64+amd64 + app + dmg + zip |
+
+```bash
+# On macOS with Xcode CLT:
+export CGO_ENABLED=1
+export MACOSX_DEPLOYMENT_TARGET=11.0
+VERSION=v0.2.0 ./scripts/macos/build-product.sh
+# → dist/macos/Remote Viewer.app
+# → dist/macos/Remote-Viewer-0.2.0-macos.dmg
+# → dist/macos/Remote-Viewer-0.2.0-macos-app.zip
+```
+
+Unsigned builds work after right-click → Open (or clearing quarantine).  
+**Notarization** requires an Apple Developer ID (optional; see `entitlements.plist`). Goreleaser Pro is **not** required — we use `hdiutil` scripts.
+
+---
+
+## Windows (`.exe` + zip + NSIS)
+
+| File | Role |
+|------|------|
+| `windows/icon.ico` | Product icon |
+| `windows/winres.json` | go-winres input (VERSIONINFO + icon) |
+| `windows/installer.nsi` | NSIS setup: Program Files, Start Menu, **`.vv` association** |
+| `windows/associate-hkcu.ps1` | Per-user association for portable zip (no admin) |
+| `scripts/windows/build-product.ps1` | Build GUI exe + zip + optional setup |
+
+```powershell
+# On Windows with Go + MinGW (or MSVC) for cgo:
+$env:CGO_ENABLED = "1"
+.\scripts\windows\build-product.ps1 -Version v0.2.0
+# → dist\windows\remote-viewer.exe   (-H windowsgui, no console flash)
+# → dist\windows\remote-viewer_*_windows_amd64.zip
+# → dist\windows\remote-viewer-setup-*-amd64.exe  (if NSIS installed)
+```
+
+Portable association (current user):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File associate-hkcu.ps1 -ExePath .\remote-viewer.exe
+```
+
+Unsigned builds may trigger SmartScreen; verify release checksums.
+
+---
+
+## GoReleaser
+
+Root [`.goreleaser.yaml`](../.goreleaser.yaml):
+
+- **Unix** builds: linux + darwin archives; Linux **nFPM** deb/rpm with desktop/MIME/icons
+- **Windows** build id uses `-H windowsgui` (prefer building on Windows)
+- Releases are **draft** by default
 
 ```bash
 goreleaser release --snapshot --clean
 ```
 
-Note: Fyne builds often need `CGO_ENABLED=1` and platform GUI libraries.
+---
+
+## Signing (optional, later)
+
+| Platform | Without signing | With signing |
+|----------|-----------------|--------------|
+| macOS | Right-click Open / remove quarantine | Developer ID + `notarytool` + staple |
+| Windows | SmartScreen click-through | Authenticode (e.g. Azure Trusted Signing) |
+| Linux | Normal package install | Distro or own apt/rpm repo keys |
+
+Signing is not required for open-source dogfood; recommended before wide desktop distribution.

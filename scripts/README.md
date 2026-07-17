@@ -8,6 +8,11 @@ Helper scripts for CI, local development, and QEMU SPICE interop.
 | `interop_qemu.sh` | Local QEMU SPICE password lab + record fixture hooks |
 | `run_integration.sh` | Run `//go:build integration` tests against the lab |
 | `milestone0_memo.md` | Milestone 0 crypto / CONNECT / DN gate notes |
+| `linux/build-product.sh` | Linux tar.gz + deb/rpm (GoReleaser) |
+| `macos/build-product.sh` | Universal macOS `.app` + `.dmg` + zip |
+| `windows/build-product.ps1` | Windows GUI `.exe` + zip + optional NSIS |
+
+Product packaging details: [packaging/README.md](../packaging/README.md).
 
 ## QEMU interop lab
 

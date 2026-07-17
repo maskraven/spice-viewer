@@ -1,5 +1,7 @@
-# Goreleaser config for remote-viewer (Phase 2 packaging).
-# Docs: https://goreleaser.com
+# Goreleaser OSS — Linux product packages (run on Linux with CGO).
+# macOS .app/.dmg  → scripts/macos/build-product.sh  (macos-latest)
+# Windows exe/zip  → scripts/windows/build-product.ps1 (windows-latest)
+# See packaging/README.md and .github/workflows/release.yml
 version: 2
 
 project_name: remote-viewer
@@ -9,30 +11,24 @@ before:
     - go mod tidy
 
 builds:
-  - id: remote-viewer
+  - id: remote-viewer-linux
     main: ./cmd/remote-viewer
     binary: remote-viewer
     env:
       - CGO_ENABLED=1
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     ldflags:
       - -s -w -X main.Version={{.Version}}
 
 archives:
   - id: default
+    ids:
+      - remote-viewer-linux
     formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     files:
@@ -40,25 +36,74 @@ archives:
       - README.md
       - CHANGELOG.md
       - docs/proxmox.md
-      - packaging/*
+      - packaging/**/*
 
 nfpms:
   - id: remote-viewer
     package_name: remote-viewer-spice
+    ids:
+      - remote-viewer-linux
     homepage: https://github.com/maskraven/virt-viewer
     maintainer: maskraven
-    description: SPICE remote display client with Proxmox Console support
+    description: |-
+      SPICE remote display client with Proxmox Console (.vv) support.
+      Optional system FFmpeg for H.264 on Linux (never bundled).
     license: Apache-2.0
+    section: net
+    priority: optional
     formats:
       - deb
       - rpm
-    binds:
-      - packaging/remote-viewer.desktop:/usr/share/applications/remote-viewer.desktop
-      - packaging/remote-viewer.xml:/usr/share/mime/packages/remote-viewer.xml
+    bindir: /usr/bin
+    contents:
+      - src: packaging/remote-viewer.desktop
+        dst: /usr/share/applications/remote-viewer.desktop
+        file_info:
+          mode: 0644
+      - src: packaging/remote-viewer.xml
+        dst: /usr/share/mime/packages/remote-viewer.xml
+        file_info:
+          mode: 0644
+      - src: packaging/icons/hicolor
+        dst: /usr/share/icons/hicolor
+        type: tree
+      - src: packaging/README.md
+        dst: /usr/share/doc/remote-viewer-spice/README.md
+        file_info:
+          mode: 0644
+      - src: LICENSE
+        dst: /usr/share/doc/remote-viewer-spice/copyright
+        file_info:
+          mode: 0644
+    scripts:
+      postinstall: packaging/scripts/postinstall.sh
+      postremove: packaging/scripts/postremove.sh
     dependencies:
       - libgl1
+      - libx11-6
+      - libxcursor1
+      - libxrandr2
+      - libxinerama1
+      - libxi6
+      - libxkbcommon0
+      - libwayland-client0
     recommends:
-      - spice-vdagent
+      - ffmpeg
+    conflicts:
+      - virt-viewer
+    overrides:
+      rpm:
+        dependencies:
+          - libGL
+          - libX11
+          - libXcursor
+          - libXrandr
+          - libXinerama
+          - libXi
+          - libxkbcommon
+          - libwayland-client
+        recommends:
+          - ffmpeg
 
 checksum:
   name_template: checksums.txt

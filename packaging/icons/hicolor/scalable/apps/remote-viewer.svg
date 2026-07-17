@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Simple monitor + remote link mark for remote-viewer -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e3a5f"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- monitor bezel -->
+  <rect x="96" y="112" width="320" height="224" rx="24" fill="#0b1220" stroke="#3778dc" stroke-width="16"/>
+  <!-- screen -->
+  <rect x="120" y="136" width="272" height="160" rx="12" fill="#12263f"/>
+  <!-- SPICE-ish signal arcs -->
+  <path d="M200 216c24-28 88-28 112 0" fill="none" stroke="#55a0ff" stroke-width="14" stroke-linecap="round"/>
+  <path d="M176 192c40-48 120-48 160 0" fill="none" stroke="#3778dc" stroke-width="12" stroke-linecap="round" opacity="0.85"/>
+  <circle cx="256" cy="240" r="14" fill="#8ec5ff"/>
+  <!-- stand -->
+  <rect x="232" y="336" width="48" height="28" rx="6" fill="#3778dc"/>
+  <rect x="176" y="364" width="160" height="20" rx="10" fill="#2a4d7a"/>
+</svg>

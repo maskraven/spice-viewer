@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Packaging (all platforms)
+
+#### Added
+
+- **Linux**: hicolor icons, polished `.desktop` / MIME, nFPM **contents** (deb/rpm) with postinst caches,
+  Fyne runtime deps, `ffmpeg` recommend, conflict with distro `virt-viewer`
+- **macOS**: `Remote Viewer.app` + UDZO **`.dmg`** scripts (universal arm64+amd64), `.vv` UTI in Info.plist
+- **Windows**: GUI subsystem exe (`-H windowsgui`), zip, NSIS installer (`.vv` ProgID), HKCU associate script
+- **CI**: `.github/workflows/release.yml` native matrix (ubuntu / macos / windows) → draft GitHub Release
+- Docs: [packaging/README.md](packaging/README.md)
+
 ### Phase 3 — Parity stretch (in progress)
 
 #### Added

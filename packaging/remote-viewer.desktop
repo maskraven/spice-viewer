@@ -1,12 +1,14 @@
 [Desktop Entry]
 Type=Application
-Name=remote-viewer (SPICE)
+Version=1.0
+Name=Remote Viewer (SPICE)
 GenericName=SPICE Remote Viewer
-Comment=Open Proxmox / virt-viewer SPICE connection files
+Comment=Open Proxmox / virt-viewer SPICE connection files (.vv)
 Exec=remote-viewer %f
-Icon=computer
+TryExec=remote-viewer
+Icon=remote-viewer
 Terminal=false
-Categories=Network;RemoteAccess;
+Categories=Network;RemoteAccess;System;
 MimeType=application/x-virt-viewer;
-Keywords=SPICE;Proxmox;VDI;remote;
+Keywords=SPICE;Proxmox;VDI;remote;virt-viewer;console;
 StartupNotify=true

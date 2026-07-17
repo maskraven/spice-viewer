@@ -20,7 +20,7 @@ A greenfield, library-first [SPICE](https://www.spice-space.org/) remote display
 | Record / USB redir / WebDAV | **Scaffolds only** (best-effort open; no full USB host / real mic) |
 | GUI: Send Keys, Edit copy/paste, grab, hotkeys | Implemented (Fyne) |
 | Headless (`--headless`) | Implemented |
-| Packaging (`.desktop`, MIME, goreleaser) | Scaffold under `packaging/` + `.goreleaser.yaml` |
+| Packaging | **Linux** deb/rpm/tar.gz · **macOS** `.app`/`.dmg` · **Windows** exe/zip/NSIS — see [packaging/README.md](packaging/README.md) |
 | Live Proxmox lab acceptance | **Pending operator sign-off** (not in CI) |
 
 There is **no** auto-reconnect for short-lived tickets: after expiry or disconnect, open Console again in Proxmox for a new `.vv`.
@@ -49,7 +49,7 @@ Changelog: [CHANGELOG.md](CHANGELOG.md).
 
 ## Install / build
 
-Requires **Go 1.22+**.
+Requires **Go 1.22+**. Product packages need **native** `CGO_ENABLED=1` builds (Fyne; VideoToolbox / Media Foundation on macOS / Windows).
 
 ```bash
 git clone https://github.com/maskraven/virt-viewer.git
@@ -64,6 +64,17 @@ Optional release version stamp:
 ```bash
 go build -ldflags "-X main.Version=v0.1.0" -o remote-viewer ./cmd/remote-viewer
 ```
+
+### Product packages (all platforms)
+
+| OS | Command (on that OS) | Output |
+|----|----------------------|--------|
+| Linux | `./scripts/linux/build-product.sh` | `tar.gz`, deb, rpm (GoReleaser) |
+| macOS | `VERSION=v0.2.0 ./scripts/macos/build-product.sh` | `.app`, `.dmg`, app zip |
+| Windows | `.\scripts\windows\build-product.ps1 -Version v0.2.0` | `.exe`, zip, optional NSIS setup |
+
+Details, MIME/`.vv` associations, and signing notes: **[packaging/README.md](packaging/README.md)**.  
+Tag releases (`v*`) run [`.github/workflows/release.yml`](.github/workflows/release.yml) on Linux / macOS / Windows runners and draft a GitHub Release.
 
 Fyne pulls platform GUI dependencies on first build (OpenGL / OS window stack). Headless CI and dogfood use `--headless` and do not require a display for the NullDriver path.
 

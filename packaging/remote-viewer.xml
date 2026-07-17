@@ -3,6 +3,7 @@
   <mime-type type="application/x-virt-viewer">
     <comment>virt-viewer connection file</comment>
     <comment xml:lang="en">SPICE / virt-viewer connection (.vv)</comment>
+    <icon name="application-x-virt-viewer"/>
     <glob pattern="*.vv"/>
   </mime-type>
 </mime-info>

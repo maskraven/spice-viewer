@@ -21,3 +21,9 @@ testdata/records/*.bin
 *.swp
 *~
 .DS_Store
+
+# Generated Windows resources (go-winres)
+cmd/remote-viewer/rsrc_windows_*.syso
+
+# Local package output
+/dist/
