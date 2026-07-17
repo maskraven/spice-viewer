@@ -451,9 +451,10 @@ func (ui *sessionUI) onKeyDown(ev *fyne.KeyEvent) {
 		}
 	}
 
-	// Right Control also releases grab (spice-gtk-style escape); not sent to guest.
+	// Right Control releases grab and shows the host pointer immediately
+	// (spice-gtk-style escape). Not forwarded to the guest while grabbed.
 	if name == desktop.KeyControlRight && ui.grab.Active() {
-		ui.releaseGrab()
+		ui.releaseGrab() // includes forceHostCursorVisible
 		return
 	}
 
@@ -605,6 +606,13 @@ func (ui *sessionUI) releaseGrab() {
 	if ui.pad != nil {
 		ui.pad.resetMotion()
 		ui.pad.Refresh()
+	}
+	// Fyne only re-reads Cursorable.Cursor() on mouse motion, so after ungrab
+	// (Right Ctrl / Ctrl+Alt+R / Ungrab) the pointer stayed HiddenCursor until
+	// the user moved the mouse. Force the OS arrow visible immediately.
+	forceHostCursorVisible()
+	if ui.win != nil {
+		ui.win.Canvas().Refresh(ui.pad)
 	}
 	ui.refreshStatus()
 }
