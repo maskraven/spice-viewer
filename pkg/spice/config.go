@@ -76,6 +76,11 @@ type ConnectConfig struct {
 	// CLI: remote-viewer --share-dir=PATH
 	ShareDir string
 
+	// Profile maps to SPICE preferred image compression / video codec hints
+	// (not a protocol-native profile; server may ignore). CLI: --profile=…
+	// Default is ProfileDefault (auto_glz + H.264/MJPEG when available).
+	Profile PerformanceProfile
+
 	// dialer overrides the default connector dialer (tests; unexported).
 	dialer connector.Dialer
 }

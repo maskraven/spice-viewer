@@ -280,9 +280,25 @@ const (
 	MsgDisplayDrawComposite    uint16 = 318
 )
 
-// Display channel client messages.
+// Display channel client messages (spice/enums.h).
 const (
-	MsgcDisplayInit uint16 = 101 // SPICE_MSGC_DISPLAY_INIT
+	MsgcDisplayInit                     uint16 = 101 // SPICE_MSGC_DISPLAY_INIT
+	MsgcDisplayStreamReport             uint16 = 102 // SPICE_MSGC_DISPLAY_STREAM_REPORT
+	MsgcDisplayPreferredCompression     uint16 = 103 // SPICE_MSGC_DISPLAY_PREFERRED_COMPRESSION
+	MsgcDisplayGLDrawDone               uint16 = 104 // SPICE_MSGC_DISPLAY_GL_DRAW_DONE
+	MsgcDisplayPreferredVideoCodecType  uint16 = 105 // SPICE_MSGC_DISPLAY_PREFERRED_VIDEO_CODEC_TYPE
+)
+
+// SpiceImageCompression (preferred image compression enum).
+const (
+	ImageCompressionInvalid uint8 = 0 // SPICE_IMAGE_COMPRESSION_INVALID
+	ImageCompressionOff     uint8 = 1 // SPICE_IMAGE_COMPRESSION_OFF
+	ImageCompressionAutoGLZ uint8 = 2 // SPICE_IMAGE_COMPRESSION_AUTO_GLZ
+	ImageCompressionAutoLZ  uint8 = 3 // SPICE_IMAGE_COMPRESSION_AUTO_LZ
+	ImageCompressionQuic    uint8 = 4 // SPICE_IMAGE_COMPRESSION_QUIC
+	ImageCompressionGLZ     uint8 = 5 // SPICE_IMAGE_COMPRESSION_GLZ
+	ImageCompressionLZ      uint8 = 6 // SPICE_IMAGE_COMPRESSION_LZ
+	ImageCompressionLZ4     uint8 = 7 // SPICE_IMAGE_COMPRESSION_LZ4
 )
 
 // DisplayInitBodySize is sizeof(SpiceMsgcDisplayInit): 14 bytes.

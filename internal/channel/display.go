@@ -115,16 +115,34 @@ type Display struct {
 	glzWin         *codec.GLZWindow // Global LZ dictionary (GLZ_RGB / ZLIB_GLZ_RGB)
 	ack            protocol.AckState
 	initSent       bool
+
+	// prefImage is SpiceImageCompression for PREFERRED_COMPRESSION (0 = skip).
+	prefImage uint8
+	// prefVideo is ordered SpiceVideoCodecType list for PREFERRED_VIDEO_CODEC_TYPE.
+	prefVideo []uint8
+}
+
+// DisplayOpts configures post-INIT client preferences (performance profiles).
+type DisplayOpts struct {
+	// PreferredImageCompression is a SpiceImageCompression value; 0 = do not send.
+	PreferredImageCompression uint8
+	// PreferredVideoCodecs is preference order; empty = do not send.
+	PreferredVideoCodecs []uint8
 }
 
 // NewDisplay wraps a linked display-channel connection and compositor.
 // conn must already be past link auth (mini-header mode).
 // comp must be non-nil.
 func NewDisplay(conn net.Conn, comp *display.Compositor) *Display {
+	return NewDisplayOpts(conn, comp, DisplayOpts{})
+}
+
+// NewDisplayOpts is NewDisplay with preferred compression / video codec hints.
+func NewDisplayOpts(conn net.Conn, comp *display.Compositor, opts DisplayOpts) *Display {
 	if comp == nil {
 		comp = display.NewCompositor(nil)
 	}
-	return &Display{
+	d := &Display{
 		conn:           conn,
 		comp:           comp,
 		unknown:        make(map[uint16]int),
@@ -132,7 +150,28 @@ func NewDisplay(conn net.Conn, comp *display.Compositor) *Display {
 		streams:        make(map[uint32]*displayStream),
 		imgCache:       newImageCache(512),
 		glzWin:         codec.NewGLZWindow(int(protocol.DisplayGlzWindowBytes)),
+		prefImage:      opts.PreferredImageCompression,
 	}
+	if len(opts.PreferredVideoCodecs) > 0 {
+		d.prefVideo = append([]uint8(nil), opts.PreferredVideoCodecs...)
+	}
+	return d
+}
+
+// SetPreferences updates preferred compression/video hints (sent on next
+// SendInit/Run if not yet sent; call before Run for first connection).
+func (d *Display) SetPreferences(imageCompression uint8, videoCodecs []uint8) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.prefImage = imageCompression
+	if len(videoCodecs) == 0 {
+		d.prefVideo = nil
+		return
+	}
+	d.prefVideo = append([]uint8(nil), videoCodecs...)
 }
 
 // Compositor returns the underlying compositor.
@@ -165,11 +204,45 @@ func (d *Display) SendInit() error {
 	body[9] = 1 // glz_dictionary_id
 	glzUnits := protocol.DisplayGlzWindowBytes / 4
 	binary.LittleEndian.PutUint32(body[10:14], uint32(glzUnits))
-	return protocol.WriteMessage(d.conn, protocol.MsgcDisplayInit, body)
+	if err := protocol.WriteMessage(d.conn, protocol.MsgcDisplayInit, body); err != nil {
+		return err
+	}
+	return d.sendPreferences()
 }
 
-// Run sends DISPLAY_INIT then reads and handles messages until ctx cancel or
-// conn close. Soft-skipped draw errors do not stop the loop.
+// ApplyPreferences re-sends preferred compression / video codec (after
+// SetPreferences). Safe to call mid-session when the server supports the caps.
+func (d *Display) ApplyPreferences() error {
+	return d.sendPreferences()
+}
+
+// sendPreferences sends preferred compression / video codec when configured.
+// Best-effort: failures are returned so init fails closed only if wire is dead.
+func (d *Display) sendPreferences() error {
+	if d == nil || d.conn == nil {
+		return fmt.Errorf("channel: display: nil conn")
+	}
+	d.mu.Lock()
+	img := d.prefImage
+	vid := append([]uint8(nil), d.prefVideo...)
+	d.mu.Unlock()
+
+	if img != 0 && img != protocol.ImageCompressionInvalid {
+		body := protocol.EncodePreferredCompression(img)
+		if err := protocol.WriteMessage(d.conn, protocol.MsgcDisplayPreferredCompression, body); err != nil {
+			return fmt.Errorf("channel: preferred compression: %w", err)
+		}
+	}
+	if body := protocol.EncodePreferredVideoCodecType(vid); len(body) > 0 {
+		if err := protocol.WriteMessage(d.conn, protocol.MsgcDisplayPreferredVideoCodecType, body); err != nil {
+			return fmt.Errorf("channel: preferred video codec: %w", err)
+		}
+	}
+	return nil
+}
+
+// Run sends DISPLAY_INIT (+ preferences) then reads and handles messages until
+// ctx cancel or conn close. Soft-skipped draw errors do not stop the loop.
 func (d *Display) Run(ctx context.Context) error {
 	if d == nil || d.conn == nil {
 		return fmt.Errorf("channel: display: nil conn")

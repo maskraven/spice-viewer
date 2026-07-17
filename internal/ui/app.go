@@ -54,7 +54,7 @@ func RunGUI(ctx context.Context, cfg spice.ConnectConfig) error {
 	if title == "" {
 		title = "remote-viewer"
 	}
-	ui := newSessionUI(a, surface, bind, title, cfg.Fullscreen)
+	ui := newSessionUI(a, surface, bind, title, cfg.Fullscreen, cfg.Profile)
 
 	client, err := spice.Connect(ctx, cfg)
 	if err != nil {

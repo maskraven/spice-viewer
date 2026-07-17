@@ -193,6 +193,7 @@ func FormatSendKeyHelp(bind Bindings) string {
 	b.WriteString(fmt.Sprintf("  Toggle control bar:      %s\n", chordLabel(bind.ToggleChrome)))
 	b.WriteString("\nControl bar: move the pointer to the top edge of the display\n")
 	b.WriteString("to reveal the floating toolbar; Pin keeps it visible.\n")
+	b.WriteString("  Right Ctrl — also releases grab (not sent to guest while grabbed)\n")
 	b.WriteString("\nTip: use Send Keys → Ctrl+Alt+Del for Windows login screens.")
 	return b.String()
 }

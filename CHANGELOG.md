@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Added
 
+- **Performance profiles** (product layer on SPICE prefs, not a protocol profile type):
+  - CLI `--profile=default|lan|wan|quality`; GUI **Profile** menu
+  - Sends `PREFERRED_COMPRESSION` + `PREFERRED_VIDEO_CODEC_TYPE` after DISPLAY_INIT
+  - Server may ignore when QEMU pins image-compression / WAN options
+- **Right Control** releases grab (in addition to Ctrl+Alt+R); not injected while grabbed
 - **Record / USB redir / WebDAV channel scaffolds** (best-effort; never session-fatal):
   - Record: `NullRecord` default; `MODE=RAW` + `START_MARK` on START; no PCM from null driver
   - USB redir: multi-id open; SpiceVMC DATA discard loop; optional filter hook; no libusb

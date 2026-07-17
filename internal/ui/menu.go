@@ -11,6 +11,8 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/maskraven/virt-viewer/pkg/spice"
 )
 
 // installMenus builds the main menu bar. Daily controls live in the floating
@@ -58,6 +60,22 @@ func (ui *sessionUI) installMenus() {
 		}),
 	)
 
+	// --- Profile (SPICE preferred compression; product-level “profiles”) ---
+	profileItems := []*fyne.MenuItem{}
+	for _, p := range []spice.PerformanceProfile{
+		spice.ProfileDefault,
+		spice.ProfileLAN,
+		spice.ProfileWAN,
+		spice.ProfileQuality,
+	} {
+		prof := p
+		item := fyne.NewMenuItem(prof.Label(), func() {
+			ui.applyProfile(prof)
+		})
+		profileItems = append(profileItems, item)
+	}
+	profileMenu := fyne.NewMenu("Profile", profileItems...)
+
 	// --- Send Keys (virt-viewer style) ---
 	sendItems := make([]*fyne.MenuItem, 0, len(StandardSendKeys())+2)
 	for _, p := range StandardSendKeys() {
@@ -82,7 +100,20 @@ func (ui *sessionUI) installMenus() {
 		}),
 	)
 
-	ui.win.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, sendMenu, helpMenu))
+	ui.win.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, profileMenu, sendMenu, helpMenu))
+}
+
+func (ui *sessionUI) applyProfile(p spice.PerformanceProfile) {
+	ui.profile = p
+	if ui.client != nil {
+		if err := ui.client.ApplyPerformanceProfile(p); err != nil {
+			log.Printf("ui: apply profile %s: %v", p.String(), err)
+			ui.setStatus(fmt.Sprintf("Profile %s failed (server may ignore)", p.String()))
+			return
+		}
+	}
+	ui.setStatus(fmt.Sprintf("Profile: %s", p.Label()))
+	ui.refreshStatus()
 }
 
 func (ui *sessionUI) showKeyboardShortcuts() {
@@ -291,7 +322,11 @@ func (ui *sessionUI) baseStatusLine() string {
 	if title == "" {
 		title = "SPICE"
 	}
-	return fmt.Sprintf("%s  ·  %s  ·  %s  ·  %s", title, grab, mode, agent)
+	prof := "default"
+	if ui != nil {
+		prof = ui.profile.String()
+	}
+	return fmt.Sprintf("%s  ·  %s  ·  %s  ·  %s  ·  %s", title, grab, mode, agent, prof)
 }
 
 // paintStatus writes "base [ ·  action]" left-aligned into the status strip.

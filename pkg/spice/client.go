@@ -15,6 +15,7 @@ import (
 
 	"github.com/maskraven/virt-viewer/internal/agent"
 	"github.com/maskraven/virt-viewer/internal/channel"
+	"github.com/maskraven/virt-viewer/internal/codec/h264"
 	"github.com/maskraven/virt-viewer/internal/display"
 	"github.com/maskraven/virt-viewer/internal/protocol"
 	"github.com/maskraven/virt-viewer/internal/security"
@@ -74,6 +75,28 @@ type Client struct {
 	// fatalCh wakes the supervisor; discErr is the source of truth for the
 	// Disconnected event error.
 	fatalCh chan error
+}
+
+// ApplyPerformanceProfile updates preferred image compression / video codec
+// on the live display channel (SPICE preference messages). Server may ignore
+// if QEMU pins compression. Safe to call after Connect.
+func (c *Client) ApplyPerformanceProfile(p PerformanceProfile) error {
+	if c == nil {
+		return ux.New(ux.ClassInternal, ux.MsgInternal, fmt.Errorf("spice: nil Client"))
+	}
+	c.mu.Lock()
+	disp := c.display
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || disp == nil {
+		return ux.New(ux.ClassInternal, ux.MsgInternal, fmt.Errorf("spice: display not ready"))
+	}
+	h264OK := h264.Available()
+	disp.SetPreferences(p.ImageCompression(), p.VideoCodecs(h264OK))
+	if err := disp.ApplyPreferences(); err != nil {
+		return ux.New(ux.ClassTransport, ux.MsgTransport, err)
+	}
+	return nil
 }
 
 // Connect dials the SPICE peer described by cfg, completes main + child links,
@@ -140,7 +163,7 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 		fatalCh:    make(chan error, 1),
 	}
 
-	bestEffortErrs, err := c.startChannels(cfg.Drivers)
+	bestEffortErrs, err := c.startChannels(cfg.Drivers, cfg.Profile)
 	if err != nil {
 		lifeCancel()
 		_ = sess.Close()
@@ -164,7 +187,7 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 // startChannels constructs display/inputs/cursor/playback/record/usb/webdav
 // handlers and starts Run loops. Returns non-nil best-effort open errors
 // (cursor/playback/record/usb/webdav degrade).
-func (c *Client) startChannels(drivers Drivers) (bestEffortErrs []error, err error) {
+func (c *Client) startChannels(drivers Drivers, profile PerformanceProfile) (bestEffortErrs []error, err error) {
 	dispConn := c.sess.DisplayConn()
 	inpConn := c.sess.InputsConn()
 	if dispConn == nil || inpConn == nil {
@@ -180,7 +203,13 @@ func (c *Client) startChannels(drivers Drivers) (bestEffortErrs []error, err err
 		ddrv = display.NewNullDriver()
 	}
 	comp := display.NewCompositor(ddrv)
-	c.display = channel.NewDisplay(dispConn, comp)
+	// Product profile → SPICE preferred compression / video codec messages.
+	// h264.Available must match DisplayChannelCaps advertisement.
+	h264OK := h264.Available()
+	c.display = channel.NewDisplayOpts(dispConn, comp, channel.DisplayOpts{
+		PreferredImageCompression: profile.ImageCompression(),
+		PreferredVideoCodecs:      profile.VideoCodecs(h264OK),
+	})
 
 	// Inputs.
 	c.inputs = channel.NewInputs(inpConn, 0)
@@ -252,7 +281,7 @@ func (c *Client) startChannels(drivers Drivers) (bestEffortErrs []error, err err
 		bestEffortErrs = append(bestEffortErrs, e)
 	}
 
-	// Run loops.
+	// Run loops (display SendInit emits preferred compression for the profile).
 	c.wg.Add(1)
 	go c.runFatal("display", func() error {
 		return c.display.Run(c.lifeCtx)

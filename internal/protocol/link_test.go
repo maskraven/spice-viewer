@@ -259,7 +259,13 @@ func TestCapsHelpers(t *testing.T) {
 
 func TestDisplayChannelCaps(t *testing.T) {
 	noH264 := DisplayChannelCaps(false)
-	for _, bit := range []uint{DisplayCapSizedStream, DisplayCapMultiCodec, DisplayCapCodecMJPEG} {
+	for _, bit := range []uint{
+		DisplayCapSizedStream,
+		DisplayCapPrefCompression,
+		DisplayCapMultiCodec,
+		DisplayCapCodecMJPEG,
+		DisplayCapPrefVideoCodecType,
+	} {
 		if !HasCap(noH264, bit) {
 			t.Fatalf("missing base bit %d in %v", bit, noH264)
 		}
@@ -271,10 +277,10 @@ func TestDisplayChannelCaps(t *testing.T) {
 	if !HasCap(withH264, DisplayCapCodecH264) {
 		t.Fatalf("expected CODEC_H264 bit %d in %v", DisplayCapCodecH264, withH264)
 	}
-	// spice-protocol: MultiCodec=8, CodecMJPEG=9, CodecH264=11
-	if DisplayCapMultiCodec != 8 || DisplayCapCodecMJPEG != 9 || DisplayCapCodecH264 != 11 {
-		t.Fatalf("display cap indices drifted: multi=%d mjpeg=%d h264=%d",
-			DisplayCapMultiCodec, DisplayCapCodecMJPEG, DisplayCapCodecH264)
+	// spice-protocol: PrefCompression=6, MultiCodec=8, CodecMJPEG=9, CodecH264=11, PrefVideo=12
+	if DisplayCapPrefCompression != 6 || DisplayCapMultiCodec != 8 || DisplayCapCodecMJPEG != 9 ||
+		DisplayCapCodecH264 != 11 || DisplayCapPrefVideoCodecType != 12 {
+		t.Fatalf("display cap indices drifted")
 	}
 }
 

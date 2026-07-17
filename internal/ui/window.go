@@ -40,6 +40,9 @@ type sessionUI struct {
 	statusAction      string
 	statusActionTimer *time.Timer
 
+	// profile is the active performance profile (preferred compression).
+	profile spice.PerformanceProfile
+
 	mu     sync.Mutex
 	mods   uint8 // currently pressed modifiers (host)
 	// pressed tracks scancodes currently down in the guest (spice-gtk key_state).
@@ -49,7 +52,7 @@ type sessionUI struct {
 	closed  bool
 }
 
-func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, startFullscreen bool) *sessionUI {
+func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, startFullscreen bool, profile spice.PerformanceProfile) *sessionUI {
 	if title == "" {
 		title = "remote-viewer"
 	}
@@ -64,6 +67,7 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 		bind:    bind,
 		fs:      startFullscreen,
 		pressed: make(map[uint16]struct{}),
+		profile: profile,
 	}
 
 	pad := newMousePad(ui, view)
@@ -332,6 +336,12 @@ func (ui *sessionUI) onKeyDown(ev *fyne.KeyEvent) {
 			ui.toggleChromeVisible()
 			return
 		}
+	}
+
+	// Right Control also releases grab (spice-gtk-style escape); not sent to guest.
+	if name == desktop.KeyControlRight && ui.grab.Active() {
+		ui.releaseGrab()
+		return
 	}
 
 	if !ui.grab.Active() {

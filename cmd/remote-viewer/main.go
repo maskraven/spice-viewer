@@ -48,6 +48,8 @@ type options struct {
 	headless bool
 	// shareDir is an optional host directory for the WebDAV share scaffold.
 	shareDir string
+	// profile is a product performance profile (default|lan|wan|quality).
+	profile string
 	// path is the .vv file; empty when no positional was given.
 	path string
 }
@@ -61,6 +63,7 @@ func parseArgs(args []string, stderr io.Writer) (options, error) {
 	fs.BoolVar(&opts.version, "version", false, "print version and exit")
 	fs.BoolVar(&opts.headless, "headless", false, "run without GUI (NullDriver; for CI and dogfood)")
 	fs.StringVar(&opts.shareDir, "share-dir", "", "optional host directory for WebDAV share scaffold (best-effort)")
+	fs.StringVar(&opts.profile, "profile", "default", "display performance profile: default|lan|wan|quality (preferred compression hint)")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: remote-viewer [flags] <file.vv>\n\n")
 		fmt.Fprintf(stderr, "Open a virt-viewer / Proxmox SPICE connection file and establish a session.\n\n")
@@ -71,6 +74,7 @@ func parseArgs(args []string, stderr io.Writer) (options, error) {
 		fs.PrintDefaults()
 		fmt.Fprintf(stderr, "\nExamples:\n")
 		fmt.Fprintf(stderr, "  remote-viewer pve-spice.vv\n")
+		fmt.Fprintf(stderr, "  remote-viewer --profile=wan pve-spice.vv\n")
 		fmt.Fprintf(stderr, "  remote-viewer --headless pve-spice.vv\n")
 		fmt.Fprintf(stderr, "  remote-viewer --share-dir=$HOME/Public pve-spice.vv\n")
 		fmt.Fprintf(stderr, "  remote-viewer -version\n")
@@ -113,11 +117,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	prof, err := spice.ParsePerformanceProfile(opts.profile)
+	if err != nil {
+		fmt.Fprintf(stderr, "remote-viewer: %v\n", err)
+		return exitUsage
+	}
+
 	var runErr error
 	if opts.headless {
-		runErr = runHeadless(ctx, opts.path, opts.shareDir, stdout, stderr)
+		runErr = runHeadless(ctx, opts.path, opts.shareDir, prof, stdout, stderr)
 	} else {
-		runErr = runGUI(ctx, opts.path, opts.shareDir, stdout, stderr)
+		runErr = runGUI(ctx, opts.path, opts.shareDir, prof, stdout, stderr)
 	}
 	if runErr != nil {
 		msg := ux.UserMessage(runErr)
@@ -134,7 +144,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // runGUI parses the .vv and runs the Fyne UI (display + grab + hotkeys).
-func runGUI(ctx context.Context, path, shareDir string, stdout, stderr io.Writer) error {
+func runGUI(ctx context.Context, path, shareDir string, profile spice.PerformanceProfile, stdout, stderr io.Writer) error {
 	f, err := openConnectionFile(path)
 	if err != nil {
 		return err
@@ -151,6 +161,7 @@ func runGUI(ctx context.Context, path, shareDir string, stdout, stderr io.Writer
 		return err
 	}
 	cfg.ShareDir = shareDir
+	cfg.Profile = profile
 
 	// Title fallback for empty .vv title.
 	if cfg.Title == "" {
@@ -158,7 +169,7 @@ func runGUI(ctx context.Context, path, shareDir string, stdout, stderr io.Writer
 	}
 
 	if title := cfg.Title; title != "" {
-		fmt.Fprintf(stdout, "remote-viewer: opening GUI session (%s)\n", title)
+		fmt.Fprintf(stdout, "remote-viewer: opening GUI session (%s, profile=%s)\n", title, profile.String())
 	}
 
 	err = ui.RunGUI(ctx, cfg)
@@ -178,7 +189,7 @@ func runGUI(ctx context.Context, path, shareDir string, stdout, stderr io.Writer
 
 // runHeadless parses the .vv (with product delete semantics), connects with
 // NullDriver, and waits until the session ends or ctx is cancelled.
-func runHeadless(ctx context.Context, path, shareDir string, stdout, stderr io.Writer) error {
+func runHeadless(ctx context.Context, path, shareDir string, profile spice.PerformanceProfile, stdout, stderr io.Writer) error {
 	f, err := openConnectionFile(path)
 	if err != nil {
 		return err
@@ -195,6 +206,7 @@ func runHeadless(ctx context.Context, path, shareDir string, stdout, stderr io.W
 		return err
 	}
 	cfg.ShareDir = shareDir
+	cfg.Profile = profile
 	// Product headless path: NullDriver, null cursor, NullPlayback, NullRecord.
 	cfg.Drivers = spice.Drivers{
 		Display:  spice.NewNullDriver(),
