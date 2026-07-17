@@ -56,7 +56,10 @@ func (g *guestView) refreshFromSurface() {
 		if snap == nil {
 			return
 		}
+		// Replace the image object so Fyne always re-uploads texture pixels.
+		// Reusing the same *image.RGBA pointer can leave a stale GPU cache.
 		g.img.Image = snap
+		g.img.Refresh()
 		w, h := g.surface.Size()
 		if w > 0 && h > 0 {
 			// Cap reported min size so huge guests do not force a giant window.
@@ -69,9 +72,10 @@ func (g *guestView) refreshFromSurface() {
 				g.minH = 540
 			}
 		}
-		g.img.Refresh()
 		g.Refresh()
 	}
+	// Present is off the UI thread; schedule refresh without blocking the
+	// display channel (DoAndWait can deadlock against the UI event loop).
 	if fyne.CurrentApp() != nil {
 		fyne.Do(apply)
 		return

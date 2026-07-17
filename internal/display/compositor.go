@@ -230,7 +230,53 @@ func (c *Compositor) Copy(surfaceID uint32, dest image.Rectangle, src *codec.RGB
 	return nil
 }
 
+// CopyBits blits within a single surface from srcOrigin to dest (scroll).
+// Handles overlapping regions safely (temp buffer when needed).
+func (c *Compositor) CopyBits(surfaceID uint32, dest image.Rectangle, srcOrigin image.Point, clips []image.Rectangle) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	s, ok := c.surfaces[surfaceID]
+	if !ok {
+		return fmt.Errorf("display: copybits: surface %d not found", surfaceID)
+	}
+	if dest.Empty() {
+		return nil
+	}
+	if !s.contains(dest) {
+		return fmt.Errorf("display: copybits: dest %v outside surface %dx%d", dest, s.Width, s.Height)
+	}
+	srcRect := image.Rect(srcOrigin.X, srcOrigin.Y, srcOrigin.X+dest.Dx(), srcOrigin.Y+dest.Dy())
+	if !s.contains(srcRect) {
+		return fmt.Errorf("display: copybits: src %v outside surface", srcRect)
+	}
+
+	regions := clipRegions(dest, clips)
+	if len(regions) == 0 {
+		return nil
+	}
+
+	// Snapshot source into a temp image to handle overlap.
+	tmp := &codec.RGBA{
+		Width:  s.Width,
+		Height: s.Height,
+		Stride: s.Stride,
+		Pix:    append([]byte(nil), s.Pix...),
+	}
+	for _, r := range regions {
+		dx := r.Min.X - dest.Min.X
+		dy := r.Min.Y - dest.Min.Y
+		srcPt := image.Pt(srcOrigin.X+dx, srcOrigin.Y+dy)
+		if err := blit(s, r, tmp, srcPt); err != nil {
+			return err
+		}
+	}
+	c.presentLocked(dest, false)
+	return nil
+}
+
 // presentLocked notifies the driver. full forces Present of entire primary buffer.
+// Always presents (does not wait for DISPLAY_MARK) so progressive updates show.
 func (c *Compositor) presentLocked(dirty image.Rectangle, full bool) {
 	if c.driver == nil || !c.hasPrim {
 		return

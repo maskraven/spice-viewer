@@ -328,6 +328,21 @@ const (
 	BitmapFlagTopDown      uint8 = 1 << 2
 )
 
+// SpiceImageDescriptor flags (SpiceImageFlags).
+const (
+	ImageFlagCacheMe        uint8 = 1 << 0 // SPICE_IMAGE_FLAGS_CACHE_ME
+	ImageFlagHighBitsSet    uint8 = 1 << 1
+	ImageFlagCacheReplaceMe uint8 = 1 << 2
+)
+
+// Default client display-init cache sizes (spice-gtk defaults, 4-byte units on wire).
+const (
+	// DisplayPixmapCacheBytes is the preferred pixmap cache size in bytes (~80 MiB).
+	DisplayPixmapCacheBytes int64 = 80 << 20
+	// DisplayGlzWindowBytes is the preferred GLZ dictionary window in bytes (~16 MiB).
+	DisplayGlzWindowBytes int32 = 16 << 20
+)
+
 // Surface formats (SpiceSurfaceFmt).
 const (
 	SurfaceFmtInvalid uint32 = 0

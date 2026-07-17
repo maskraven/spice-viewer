@@ -6,6 +6,7 @@ package ui
 import (
 	"log"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -230,22 +231,42 @@ func (ui *sessionUI) updateScaleHint() {
 	ui.view.SetScaleHint(ui.win.Canvas().Scale())
 }
 
+// resizeDebounce delays agent monitors-config so continuous window layout
+// passes do not thrash the guest (looks like a frozen display).
+var (
+	resizeMu     sync.Mutex
+	resizeTimer  *time.Timer
+	lastResizeWH [2]uint32
+)
+
 // requestGuestResize asks the guest (via vdagent) to match the current pad
-// size in logical pixels. Best-effort; ignored when agent is offline.
+// size in logical pixels. Debounced 400ms; ignored when agent is offline.
 func (ui *sessionUI) requestGuestResize() {
 	if ui.client == nil || !ui.client.AgentActive() || ui.pad == nil {
 		return
 	}
 	sz := ui.pad.Size()
-	// Fyne sizes are logical; request integer guest dimensions.
 	w, h := uint32(sz.Width+0.5), uint32(sz.Height+0.5)
 	if w < 320 || h < 200 || w > 8192 || h > 8192 {
 		return
 	}
-	if err := ui.client.SetGuestDisplaySize(w, h); err != nil {
-		// Common when agent lacks monitors-config; keep quiet at debug level.
-		log.Printf("ui: guest resize %dx%d: %v", w, h, err)
+	resizeMu.Lock()
+	defer resizeMu.Unlock()
+	if lastResizeWH[0] == w && lastResizeWH[1] == h {
+		return
 	}
+	if resizeTimer != nil {
+		resizeTimer.Stop()
+	}
+	client := ui.client
+	resizeTimer = time.AfterFunc(400*time.Millisecond, func() {
+		resizeMu.Lock()
+		lastResizeWH = [2]uint32{w, h}
+		resizeMu.Unlock()
+		if err := client.SetGuestDisplaySize(w, h); err != nil {
+			log.Printf("ui: guest resize %dx%d: %v", w, h, err)
+		}
+	})
 }
 
 // mousePad is a desktop mouse-aware host for the guest view.

@@ -37,6 +37,56 @@ type displayStream struct {
 	clips     []image.Rectangle // nil = unclipped
 }
 
+// imageCache holds decoded images for SPICE_IMAGE_TYPE_FROM_CACHE lookups.
+// Without this, QEMU/SPICE reuses bitmaps via FROM_CACHE and the client
+// soft-skips every update after the first cache-eligible frame — frozen UI.
+type imageCache struct {
+	max  int
+	// simple map + insertion order for FIFO eviction
+	m    map[uint64]*codec.RGBA
+	order []uint64
+}
+
+func newImageCache(max int) *imageCache {
+	if max <= 0 {
+		max = 256
+	}
+	return &imageCache{max: max, m: make(map[uint64]*codec.RGBA)}
+}
+
+func (c *imageCache) get(id uint64) *codec.RGBA {
+	if c == nil {
+		return nil
+	}
+	return c.m[id]
+}
+
+func (c *imageCache) put(id uint64, img *codec.RGBA) {
+	if c == nil || img == nil {
+		return
+	}
+	if _, ok := c.m[id]; ok {
+		c.m[id] = cloneRGBA(img)
+		return
+	}
+	for len(c.order) >= c.max {
+		old := c.order[0]
+		c.order = c.order[1:]
+		delete(c.m, old)
+	}
+	c.m[id] = cloneRGBA(img)
+	c.order = append(c.order, id)
+}
+
+func cloneRGBA(img *codec.RGBA) *codec.RGBA {
+	if img == nil {
+		return nil
+	}
+	pix := make([]byte, len(img.Pix))
+	copy(pix, img.Pix)
+	return &codec.RGBA{Width: img.Width, Height: img.Height, Stride: img.Stride, Pix: pix}
+}
+
 // Display is the SPICE display channel reader/handler.
 //
 // It consumes mini-header framed messages on a linked display connection,
@@ -58,6 +108,7 @@ type Display struct {
 	imageSkipTypes map[uint8]int  // unsupported image types soft-skipped
 	drawSkips      int            // other soft-skipped draw/surface ops
 	streams        map[uint32]*displayStream
+	imgCache       *imageCache
 	initSent       bool
 }
 
@@ -74,6 +125,7 @@ func NewDisplay(conn net.Conn, comp *display.Compositor) *Display {
 		unknown:        make(map[uint16]int),
 		imageSkipTypes: make(map[uint8]int),
 		streams:        make(map[uint32]*displayStream),
+		imgCache:       newImageCache(512),
 	}
 }
 
@@ -82,7 +134,9 @@ func (d *Display) Compositor() *display.Compositor {
 	return d.comp
 }
 
-// SendInit writes SPICE_MSGC_DISPLAY_INIT (14 zero bytes = default caches).
+// SendInit writes SPICE_MSGC_DISPLAY_INIT with spice-gtk-compatible cache sizes.
+// Zero cache sizes cause servers to rely on FROM_CACHE without us ever caching,
+// which freezes the display after the first reusable blit.
 // Safe to call once before or at the start of Run.
 func (d *Display) SendInit() error {
 	d.mu.Lock()
@@ -93,7 +147,18 @@ func (d *Display) SendInit() error {
 	d.initSent = true
 	d.mu.Unlock()
 
+	// SpiceMsgcDisplayInit (packed, 14 bytes):
+	//   pixmap_cache_id u8
+	//   pixmap_cache_size i64   // spice-gtk: bytes/4
+	//   glz_dictionary_id u8
+	//   glz_dictionary_window_size i32 // spice-gtk: bytes/4
 	body := make([]byte, protocol.DisplayInitBodySize)
+	body[0] = 1 // pixmap_cache_id
+	cacheUnits := protocol.DisplayPixmapCacheBytes / 4
+	binary.LittleEndian.PutUint64(body[1:9], uint64(cacheUnits))
+	body[9] = 1 // glz_dictionary_id
+	glzUnits := protocol.DisplayGlzWindowBytes / 4
+	binary.LittleEndian.PutUint32(body[10:14], uint32(glzUnits))
 	return protocol.WriteMessage(d.conn, protocol.MsgcDisplayInit, body)
 }
 
@@ -173,6 +238,9 @@ func (d *Display) HandleMessage(typ uint16, data []byte) error {
 	case protocol.MsgDisplayDrawCopy:
 		d.handleDrawCopy(data)
 		return nil
+	case protocol.MsgDisplayCopyBits:
+		d.handleCopyBits(data)
+		return nil
 	case protocol.MsgDisplayStreamCreate:
 		d.handleStreamCreate(data)
 		return nil
@@ -207,6 +275,7 @@ func IsDisplayAllowed(typ uint16) bool {
 		protocol.MsgDisplayReset,
 		protocol.MsgDisplayDrawFill,
 		protocol.MsgDisplayDrawCopy,
+		protocol.MsgDisplayCopyBits,
 		protocol.MsgDisplaySurfaceCreate,
 		protocol.MsgDisplaySurfaceDestroy,
 		protocol.MsgDisplayStreamCreate,
@@ -214,7 +283,12 @@ func IsDisplayAllowed(typ uint16) bool {
 		protocol.MsgDisplayStreamDataSized,
 		protocol.MsgDisplayStreamClip,
 		protocol.MsgDisplayStreamDestroy,
-		protocol.MsgDisplayStreamDestroyAll:
+		protocol.MsgDisplayStreamDestroyAll,
+		// Palette invalidations — no-op without palette images, but must not spam logs.
+		protocol.MsgDisplayInvalList,
+		protocol.MsgDisplayInvalAllPixmaps,
+		protocol.MsgDisplayInvalPalette,
+		protocol.MsgDisplayInvalAllPalettes:
 		return true
 	default:
 		return false
@@ -424,13 +498,12 @@ func (d *Display) handleDrawCopy(data []byte) {
 		return
 	}
 
-	img, err := codec.DecodeSpiceImage(data[imgPtr:])
+	img, err := d.resolveImage(data[imgPtr:])
 	if err != nil {
 		var uerr *codec.UnsupportedImageError
 		if errors.As(err, &uerr) {
 			d.noteImageSkip(uerr.Type, err.Error())
 		} else {
-			// Peek type for diagnostics when possible.
 			typ := data[imgPtr+8]
 			if errors.Is(err, codec.ErrUnsupportedImage) {
 				d.noteImageSkip(typ, err.Error())
@@ -451,6 +524,81 @@ func (d *Display) handleDrawCopy(data []byte) {
 		d.noteDrawSkip(err.Error())
 		d.softBlackFill(base)
 	}
+}
+
+// resolveImage decodes a SpiceImage or resolves FROM_CACHE / SURFACE references.
+// CACHE_ME images are stored for later FROM_CACHE draws (critical for live UI).
+func (d *Display) resolveImage(desc []byte) (*codec.RGBA, error) {
+	if len(desc) < protocol.SpiceImageDescSize {
+		return nil, fmt.Errorf("image descriptor short: %d", len(desc))
+	}
+	id := binary.LittleEndian.Uint64(desc[0:8])
+	typ := desc[8]
+	flags := desc[9]
+
+	switch typ {
+	case protocol.ImageTypeFromCache, protocol.ImageTypeFromCacheLossless:
+		d.mu.Lock()
+		img := d.imgCache.get(id)
+		d.mu.Unlock()
+		if img == nil {
+			return nil, &codec.UnsupportedImageError{Type: typ}
+		}
+		return img, nil
+	case protocol.ImageTypeSurface:
+		// Payload after descriptor: surface_id u32
+		if len(desc) < protocol.SpiceImageDescSize+4 {
+			return nil, fmt.Errorf("surface image short")
+		}
+		sid := binary.LittleEndian.Uint32(desc[protocol.SpiceImageDescSize : protocol.SpiceImageDescSize+4])
+		surf := d.comp.Surface(sid)
+		if surf == nil {
+			return nil, fmt.Errorf("surface image: surface %d missing", sid)
+		}
+		// Snapshot surface pixels as RGBA for blit.
+		return surfaceToRGBA(surf), nil
+	}
+
+	img, err := codec.DecodeSpiceImage(desc)
+	if err != nil {
+		return nil, err
+	}
+	if flags&protocol.ImageFlagCacheMe != 0 || flags&protocol.ImageFlagCacheReplaceMe != 0 {
+		d.mu.Lock()
+		d.imgCache.put(id, img)
+		d.mu.Unlock()
+	}
+	return img, nil
+}
+
+// handleCopyBits implements SPICE_MSG_DISPLAY_COPY_BITS (scroll / self-blit).
+// Wire: DisplayBase + src_position (x u32, y u32).
+func (d *Display) handleCopyBits(data []byte) {
+	base, off, err := decodeDisplayBase(data)
+	if err != nil {
+		d.noteDrawSkip(fmt.Sprintf("COPY_BITS base: %v", err))
+		return
+	}
+	if off+8 > len(data) {
+		d.noteDrawSkip("COPY_BITS src pos short")
+		return
+	}
+	srcX := int(binary.LittleEndian.Uint32(data[off : off+4]))
+	srcY := int(binary.LittleEndian.Uint32(data[off+4 : off+8]))
+	srcOrigin := image.Pt(srcX, srcY)
+	if err := d.comp.CopyBits(base.SurfaceID, base.Box, srcOrigin, base.Clips); err != nil {
+		d.noteDrawSkip(err.Error())
+	}
+}
+
+func surfaceToRGBA(s *display.Surface) *codec.RGBA {
+	if s == nil {
+		return nil
+	}
+	// Surface Pix is already RGBA8888 layout used by compositor.
+	pix := make([]byte, len(s.Pix))
+	copy(pix, s.Pix)
+	return &codec.RGBA{Width: s.Width, Height: s.Height, Stride: s.Stride, Pix: pix}
 }
 
 // softBlackFill paints dest black when a COPY is skipped (design: prefer black fill).
