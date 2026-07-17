@@ -267,37 +267,57 @@ func (t darkPanelTheme) Size(n fyne.ThemeSizeName) float32 {
 	case theme.SizeNameInlineIcon:
 		return 12
 	case theme.SizeNameInnerPadding, theme.SizeNamePadding:
-		return 3
+		return 4
 	case theme.SizeNameScrollBar:
 		return 8
-	case theme.SizeNameInputBorder, theme.SizeNameSeparatorThickness:
-		return 0 // no light hairline borders on dark panels
+	case theme.SizeNameInputBorder:
+		return 1 // visible box around the Type entry
+	case theme.SizeNameInputRadius:
+		return 4
+	case theme.SizeNameSeparatorThickness:
+		return 0
 	default:
 		return t.Theme.Size(n)
 	}
 }
 
 func (t darkPanelTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
-	// Solid dark surfaces so Fyne PopUp overlay chrome is not a white board.
+	// Dark surfaces + white labels. HighImportance buttons use Primary fill
+	// with ForegroundOnPrimary text (must not be white-on-white).
 	dark := color.NRGBA{R: 32, G: 32, B: 36, A: 255}
+	// Elevated buttons so Cancel is not invisible on the same dark fill.
+	btn := color.NRGBA{R: 48, G: 50, B: 58, A: 255}
+	input := color.NRGBA{R: 22, G: 22, B: 26, A: 255} // recessed field
+	accent := color.NRGBA{R: 55, G: 120, B: 220, A: 255}
 	switch n {
-	case theme.ColorNameForeground, theme.ColorNamePrimary,
-		theme.ColorNamePlaceHolder, theme.ColorNameHyperlink,
-		theme.ColorNameHeaderBackground:
+	case theme.ColorNameForeground,
+		theme.ColorNamePlaceHolder, theme.ColorNameHyperlink:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+	case theme.ColorNamePrimary:
+		return accent
+	case theme.ColorNameForegroundOnPrimary:
 		return color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 	case theme.ColorNameDisabled:
-		return color.NRGBA{R: 200, G: 200, B: 210, A: 255}
+		return color.NRGBA{R: 160, G: 160, B: 170, A: 255}
 	case theme.ColorNameBackground, theme.ColorNameOverlayBackground,
-		theme.ColorNameMenuBackground, theme.ColorNameInputBackground,
-		theme.ColorNameButton, theme.ColorNameDisabledButton:
+		theme.ColorNameMenuBackground, theme.ColorNameHeaderBackground:
 		return dark
+	case theme.ColorNameButton:
+		return btn
+	case theme.ColorNameDisabledButton:
+		return color.NRGBA{R: 40, G: 40, B: 46, A: 255}
+	case theme.ColorNameInputBackground:
+		return input
+	case theme.ColorNameInputBorder:
+		return color.NRGBA{R: 90, G: 95, B: 110, A: 255}
 	case theme.ColorNameHover:
-		return color.NRGBA{R: 55, G: 58, B: 68, A: 255}
+		return color.NRGBA{R: 60, G: 64, B: 76, A: 255}
 	case theme.ColorNamePressed, theme.ColorNameSelection, theme.ColorNameFocus:
-		return color.NRGBA{R: 45, G: 48, B: 58, A: 255}
-	case theme.ColorNameSeparator, theme.ColorNameInputBorder, theme.ColorNameShadow:
-		// Match panel — avoids white/light edges around the popup.
-		return dark
+		return color.NRGBA{R: 45, G: 80, B: 140, A: 255}
+	case theme.ColorNameSeparator:
+		return color.NRGBA{R: 60, G: 62, B: 70, A: 255}
+	case theme.ColorNameShadow:
+		return color.NRGBA{R: 0, G: 0, B: 0, A: 120}
 	case theme.ColorNameScrollBar:
 		return color.NRGBA{R: 80, G: 82, B: 90, A: 255}
 	default:

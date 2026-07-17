@@ -259,18 +259,20 @@ func (ui *sessionUI) showTypeTextDialog() {
 	if ui.win == nil {
 		return
 	}
-	// Custom dark panel (not dialog.NewForm): dismiss on outside click,
-	// matches Keys list styling (no white board, white text).
+	// Custom dark panel: title, multi-line input box, Cancel / Send.
+	// Dismiss on outside click; themed via darkPanelTheme (no light board).
 	entry := widget.NewMultiLineEntry()
-	entry.SetPlaceHolder("US QWERTY keystrokes into the guest…")
+	entry.SetPlaceHolder("Type text to send as keystrokes (US QWERTY)…")
 	entry.Wrapping = fyne.TextWrapWord
-	entry.SetMinRowsVisible(6)
+	entry.SetMinRowsVisible(5)
 
 	title := widget.NewLabel("Type text into guest")
 	title.TextStyle = fyne.TextStyle{Bold: true}
+	hint := widget.NewLabel("Text is sent as keyboard events to the guest.")
+	hint.Importance = widget.LowImportance
 
 	var closeDlg func()
-	doType := func() {
+	doSend := func() {
 		text := entry.Text
 		closeDlg()
 		if text == "" {
@@ -283,15 +285,19 @@ func (ui *sessionUI) showTypeTextDialog() {
 		}
 		ui.setStatus(fmt.Sprintf("Typed %d characters", len([]rune(text))))
 	}
-	typeBtn := widget.NewButton("Type", doType)
-	typeBtn.Importance = widget.HighImportance
+	sendBtn := widget.NewButton("Send", doSend)
+	sendBtn.Importance = widget.HighImportance
 	cancelBtn := widget.NewButton("Cancel", func() { closeDlg() })
 	cancelBtn.Importance = widget.MediumImportance
-	buttons := container.NewHBox(cancelBtn, typeBtn)
+	// Right-aligned action row: Cancel then Send.
+	actions := container.NewBorder(nil, nil, nil,
+		container.NewHBox(cancelBtn, sendBtn),
+		nil)
 
+	header := container.NewVBox(title, hint)
 	inner := container.NewBorder(
-		title,
-		buttons,
+		header,
+		actions,
 		nil, nil,
 		entry,
 	)
@@ -301,12 +307,11 @@ func (ui *sessionUI) showTypeTextDialog() {
 	bg.StrokeWidth = 1
 	card := container.NewStack(bg, container.NewPadded(inner))
 
-	// Centered dark overlay (fixed size); tap outside dismisses.
-	ui.showDarkPanelOverlayCentered(card, fyne.NewSize(480, 280))
+	// Centered dark overlay; tap outside dismisses.
+	ui.showDarkPanelOverlayCentered(card, fyne.NewSize(460, 280))
 	closeDlg = func() {
 		ui.closeDarkOverlay()
 	}
-	// Focus entry for immediate typing.
 	ui.win.Canvas().Focus(entry)
 }
 
