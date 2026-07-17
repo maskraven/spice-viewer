@@ -237,6 +237,30 @@ internal/audio/
   sink_test.go     // start/stop/write without requiring hardware
 ```
 
+## Performance profiles (product feature)
+
+SPICE has **no** first-class performance/compression profile type. Product
+labels map to client preference messages (spice-gtk style):
+
+| Profile | Preferred image compression | Preferred video codecs |
+|---------|----------------------------|-------------------------|
+| **default** | `auto_glz` | H.264 (if available), MJPEG |
+| **lan** | `auto_lz` | H.264 (if available), MJPEG |
+| **wan** | `auto_glz` | H.264 (if available), MJPEG |
+| **quality** | `off` | MJPEG first, then H.264 |
+
+Wire after `DISPLAY_INIT`: `PREFERRED_COMPRESSION` + `PREFERRED_VIDEO_CODEC_TYPE`.
+Caps advertised: `PREF_COMPRESSION`, `PREF_VIDEO_CODEC_TYPE`.
+
+```bash
+remote-viewer --profile=wan file.vv
+```
+
+GUI: **Profile** menu (re-sends prefs on a live session).
+
+**Caveat:** Proxmox/libvirt may pin server `image-compression` or
+`jpeg-wan-compression=always`; client prefs are then only hints.
+
 ## Out of scope (still)
 
 - GPL hybrid spice-common
