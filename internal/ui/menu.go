@@ -53,20 +53,6 @@ func (ui *sessionUI) installMenus() {
 	}))
 	sendMenu := fyne.NewMenu("Send Keys", sendItems...)
 
-	// --- Edit (clipboard via vdagent when available) ---
-	editMenu := fyne.NewMenu("Edit",
-		fyne.NewMenuItem("Copy from guest", func() {
-			ui.copyFromGuest()
-		}),
-		fyne.NewMenuItem("Paste to guest", func() {
-			ui.pasteToGuest()
-		}),
-		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Type text… (no agent)", func() {
-			ui.showTypeTextDialog()
-		}),
-	)
-
 	// --- Help ---
 	helpMenu := fyne.NewMenu("Help",
 		fyne.NewMenuItem("Keyboard shortcuts", func() {
@@ -77,14 +63,14 @@ func (ui *sessionUI) installMenus() {
 				"remote-viewer — SPICE client (Proxmox-friendly)\n"+
 					"Library: github.com/maskraven/virt-viewer\n"+
 					"Display, inputs, cursor, audio, Send Keys, hotkeys.\n"+
-					"Clipboard via spice-vdagent when connected; USB later.",
+					"Clipboard: toolbar Copy/Paste via spice-vdagent; Type text fallback.",
 				ui.win)
 		}),
 	)
 
-	ui.win.SetMainMenu(fyne.NewMainMenu(fileMenu, editMenu, viewMenu, sendMenu, helpMenu))
+	ui.win.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, sendMenu, helpMenu))
 
-	// Toolbar: one-click CAD + ungrab + fullscreen (always visible).
+	// Toolbar: daily actions always visible (clipboard lives here, not an Edit menu).
 	ui.toolbar = container.NewHBox(
 		widget.NewButtonWithIcon("Ctrl+Alt+Del", theme.ConfirmIcon(), func() {
 			ui.sendKeys(SendKeyPreset{Label: "Ctrl+Alt+Del", Keys: CADScancodes()})
@@ -96,6 +82,9 @@ func (ui *sessionUI) installMenus() {
 		widget.NewButtonWithIcon("Fullscreen", theme.ViewFullScreenIcon(), func() {
 			ui.toggleFullscreen()
 			ui.refreshStatus()
+		}),
+		widget.NewButtonWithIcon("Copy", theme.ContentCopyIcon(), func() {
+			ui.copyFromGuest()
 		}),
 		widget.NewButtonWithIcon("Paste", theme.ContentPasteIcon(), func() {
 			ui.pasteToGuest()
@@ -236,21 +225,21 @@ func (ui *sessionUI) refreshStatus() {
 	if ui.status == nil {
 		return
 	}
-	grab := "ungrabbed"
+	grab := "free"
 	if ui.grab.Active() {
 		grab = "grabbed"
 	}
 	mode := "mouse?"
 	if ui.inputs != nil {
 		if ui.inputs.ClientMouse() {
-			mode = "mouse=client"
+			mode = "client mouse"
 		} else {
-			mode = "mouse=server"
+			mode = "server mouse"
 		}
 	}
-	agent := "agent=off"
+	agent := "no agent"
 	if ui.client != nil && ui.client.AgentActive() {
-		agent = "agent=on"
+		agent = "agent"
 	}
 	title := ""
 	if ui.client != nil {
@@ -259,5 +248,6 @@ func (ui *sessionUI) refreshStatus() {
 	if title == "" {
 		title = "SPICE"
 	}
-	ui.status.SetText(fmt.Sprintf("%s  |  %s  |  %s  |  %s  |  Edit menu for copy/paste", title, grab, mode, agent))
+	// Single dense line; ellipsis when the window is narrow.
+	ui.status.SetText(fmt.Sprintf("%s  ·  %s  ·  %s  ·  %s", title, grab, mode, agent))
 }

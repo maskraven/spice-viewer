@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/maskraven/virt-viewer/pkg/spice"
@@ -52,16 +53,15 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 		surface: surface,
 		bind:    bind,
 		fs:      startFullscreen,
-		status:  widget.NewLabel("Connecting…"),
+		status:  newStatusLabel("Connecting…"),
 	}
-	ui.status.Truncation = fyne.TextTruncateEllipsis
 
 	pad := newMousePad(ui, view)
 	ui.pad = pad
 	ui.installMenus()
 
-	// Layout: toolbar | guest display | status bar
-	content := container.NewBorder(ui.toolbar, ui.status, nil, nil, pad)
+	// Layout: toolbar | guest display | compact single-line status strip
+	content := container.NewBorder(ui.toolbar, newStatusBar(ui.status), nil, nil, pad)
 	win.SetContent(content)
 	win.Resize(fyne.NewSize(1024, 768))
 	win.SetMaster()
@@ -72,6 +72,46 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 	ui.wireKeys()
 	ui.refreshStatus()
 	return ui
+}
+
+// newStatusLabel builds a single-line caption status label (ellipsis when tight).
+func newStatusLabel(text string) *widget.Label {
+	l := widget.NewLabel(text)
+	l.Truncation = fyne.TextTruncateEllipsis
+	l.Wrapping = fyne.TextWrapOff
+	l.SizeName = theme.SizeNameCaptionText
+	l.Importance = widget.LowImportance
+	return l
+}
+
+// statusBar is a hairline + caption strip forced to roughly one text line height.
+// Plain Label MinSize is padded tall; Border would reserve that for the bottom.
+type statusBar struct {
+	widget.BaseWidget
+	label *widget.Label
+	sep   *widget.Separator
+}
+
+func newStatusBar(label *widget.Label) *statusBar {
+	s := &statusBar{
+		label: label,
+		sep:   widget.NewSeparator(),
+	}
+	s.ExtendBaseWidget(s)
+	return s
+}
+
+func (s *statusBar) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(container.NewBorder(s.sep, nil, nil, nil, s.label))
+}
+
+func (s *statusBar) MinSize() fyne.Size {
+	s.ExtendBaseWidget(s)
+	th := s.Theme()
+	// Caption text + small vertical pad + separator thickness ≈ one status line.
+	h := th.Size(theme.SizeNameCaptionText)*1.35 +
+		th.Size(theme.SizeNameSeparatorThickness) + 4
+	return fyne.NewSize(32, h)
 }
 
 // AttachClient sets the live client/inputs after Connect.
