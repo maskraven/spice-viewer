@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 
+	"github.com/maskraven/virt-viewer/internal/audio"
 	"github.com/maskraven/virt-viewer/internal/ux"
 	"github.com/maskraven/virt-viewer/pkg/spice"
 )
@@ -37,6 +38,16 @@ func RunGUI(ctx context.Context, cfg spice.ConnectConfig) error {
 	surface := NewSurface()
 	// Driver must be set before Connect so the display channel presents here.
 	cfg.Drivers.Display = surface
+	// Host audio is best-effort: never fail the session if the device is missing.
+	var hostSink *audio.Sink
+	if cfg.Drivers.Playback == nil {
+		if sink := audio.OpenDefault(); sink != nil {
+			cfg.Drivers.Playback = sink
+			if s, ok := sink.(*audio.Sink); ok {
+				hostSink = s
+			}
+		}
+	}
 
 	a := app.NewWithID("com.maskraven.remote-viewer")
 	title := cfg.Title
@@ -47,9 +58,17 @@ func RunGUI(ctx context.Context, cfg spice.ConnectConfig) error {
 
 	client, err := spice.Connect(ctx, cfg)
 	if err != nil {
+		if hostSink != nil {
+			hostSink.Close()
+		}
 		return err
 	}
 	ui.AttachClient(client)
+	defer func() {
+		if hostSink != nil {
+			hostSink.Close()
+		}
+	}()
 
 	var (
 		closeOnce sync.Once

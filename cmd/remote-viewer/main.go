@@ -189,10 +189,11 @@ func runHeadless(ctx context.Context, path string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
-	// Product headless path: always NullDriver (and null cursor).
+	// Product headless path: NullDriver, null cursor, NullPlayback (no host audio).
 	cfg.Drivers = spice.Drivers{
-		Display: spice.NewNullDriver(),
-		Cursor:  spice.NewNullCursorDriver(),
+		Display:  spice.NewNullDriver(),
+		Cursor:   spice.NewNullCursorDriver(),
+		Playback: spice.NewNullPlayback(),
 	}
 
 	client, err := spice.Connect(ctx, cfg)

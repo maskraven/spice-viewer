@@ -158,10 +158,34 @@ Never session-fatal if these fail to open.
 
 ## Host audio
 
-`PlaybackDriver` remains the public hook. Phase 3 adds
-`internal/audio` platform sinks that implement it (Core Audio / WASAPI via thin
-backends or a pure-Go library). Default product path may still use NullPlayback
-until the UI opts in.
+`PlaybackDriver` remains the public hook for RAW S16LE PCM from the playback
+channel. Phase 3 adds `internal/audio`:
+
+| Platform | Backend | Shipping |
+|----------|---------|----------|
+| **macOS** | [ebitengine/oto/v3](https://github.com/ebitengine/oto) (Core Audio via purego) | Built in; no cgo |
+| **Windows** | oto (WASAPI via purego) | Built in; no cgo |
+| **Linux** | Stub (`Available() == false`) | Silent until ALSA/Pulse path lands |
+| **Headless** | `NullPlayback` | Explicit in `--headless` |
+
+**Product policy**
+
+- GUI (`internal/ui.RunGUI`): when `Drivers.Playback` is nil, call
+  `audio.OpenDefault()`; if non-nil, attach it. Init failure → log and continue
+  with NullPlayback semantics (session never fails for audio).
+- `--headless`: always `spice.NewNullPlayback()` (no host device).
+- Build tag `noaudio` forces the stub on every GOOS (silent CI builds).
+
+Package layout:
+
+```text
+internal/audio/
+  doc.go
+  sink.go          // OpenDefault, Sink, PCM ring buffer, volume helpers
+  sink_oto.go      // darwin/windows oto backend
+  sink_stub.go     // linux / other / -tags=noaudio
+  sink_test.go     // start/stop/write without requiring hardware
+```
 
 ## Out of scope (still)
 
@@ -178,6 +202,7 @@ until the UI opts in.
 4. Record/USB/WebDAV open as best-effort when listed; session survives absence.
 5. `docs/phase3.md` + CHANGELOG list platform backends and gaps vs spice-gtk.
 6. Manual Proxmox checklist remains operator-owned for live sign-off.
+7. GUI on macOS/Windows: host audio plays when the guest sends RAW PCM; headless stays silent.
 
 ## PR-style work units
 

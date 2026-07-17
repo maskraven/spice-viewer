@@ -35,7 +35,7 @@
 //
 // Playback: set Drivers.Playback to a host audio sink implementing
 // PlaybackDriver (WritePCM for S16LE). Nil uses NullPlayback (discard). See
-// playback.go for the UI hook pattern. No cgo host device is linked by default.
+// playback.go and internal/audio (OpenDefault) for the product GUI hook.
 //
 // Import rules: may import internal/* as needed, but not internal/ui or GUI
 // toolkits (library-first; UI stays in internal/ui).

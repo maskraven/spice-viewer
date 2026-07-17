@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 3 — Parity stretch (in progress)
+
+#### Added
+
+- **Host audio sink** (`internal/audio`):
+  - GUI `OpenDefault()` → host playback on **macOS/Windows** via ebitengine/oto (purego; RAW S16LE)
+  - **Linux** stub (`Available()==false`) until ALSA/Pulse lands
+  - `--headless` keeps `NullPlayback`; init failure is never session-fatal
+  - See [docs/phase3.md](docs/phase3.md#host-audio)
+
+#### Planned (Phase 3+)
+
+- GLZ (pure Go); H.264 via **OS decoders** (macOS VideoToolbox, Windows Media Foundation)
+- **Linux H.264**: user-provided **FFmpeg** (not bundled) — install guide in [docs/phase3.md](docs/phase3.md#linux-install-ffmpeg)
+- USB redirection, WebDAV, record channel
+- Linux host audio (ALSA/Pulse) beyond the current stub
+- Live Proxmox operator sign-off updates in `docs/acceptance-v0.1.md`
+
 ### Phase 2 — Desktop comfort
 
 #### Added
@@ -18,14 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Audio**: playback channel best-effort (RAW S16LE PCM → `PlaybackDriver`; default NullPlayback)
 - **UI**: Send Keys menu, Type text…, toolbar CAD/Ungrab/Fullscreen/Paste
 - **Packaging scaffold**: `.goreleaser.yaml`, `packaging/remote-viewer.desktop`, MIME `application/x-virt-viewer`
-
-#### Planned (Phase 3+)
-
-- GLZ (pure Go); H.264 via **OS decoders** (macOS VideoToolbox, Windows Media Foundation)
-- **Linux H.264**: user-provided **FFmpeg** (not bundled) — install guide in [docs/phase3.md](docs/phase3.md#linux-install-ffmpeg)
-- USB redirection, WebDAV, record channel
-- Host audio sink beyond NullPlayback (platform packages)
-- Live Proxmox operator sign-off updates in `docs/acceptance-v0.1.md`
 
 ## [0.1.0] — Phase 1 Proxmox MVP
 

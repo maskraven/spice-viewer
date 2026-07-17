@@ -30,6 +30,7 @@ NO_UI_PACKAGES=(
   security
   ux
   agent
+  audio
 )
 
 # Load import paths for a go list pattern into the named variable (by ref).
@@ -124,7 +125,7 @@ for core in "${NO_UI_PACKAGES[@]}"; do
   done <<< "$_imps"
 done
 
-# --- internal/ui: only pkg/spice, pkg/vvfile, internal/ux among module paths ---
+# --- internal/ui: only pkg/spice, pkg/vvfile, internal/ux, internal/audio among module paths ---
 echo "==> checking internal/ui imports"
 load_imports _imps ./internal/ui/...
 while IFS= read -r imp; do
@@ -133,11 +134,12 @@ while IFS= read -r imp; do
     "${MODULE}/pkg/spice" | "${MODULE}/pkg/spice/"* | \
     "${MODULE}/pkg/vvfile" | "${MODULE}/pkg/vvfile/"* | \
     "${MODULE}/internal/ux" | "${MODULE}/internal/ux/"* | \
+    "${MODULE}/internal/audio" | "${MODULE}/internal/audio/"* | \
     "${MODULE}/internal/ui" | "${MODULE}/internal/ui/"*)
       continue
       ;;
     "${MODULE}/"*)
-      echo "FAIL: internal/ui must not import $imp (only pkg/spice, pkg/vvfile, internal/ux)"
+      echo "FAIL: internal/ui must not import $imp (only pkg/spice, pkg/vvfile, internal/ux, internal/audio)"
       failed=1
       ;;
   esac

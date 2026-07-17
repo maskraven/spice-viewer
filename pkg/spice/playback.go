@@ -26,8 +26,10 @@ import "github.com/maskraven/virt-viewer/internal/channel"
 //
 //	cfg.Drivers.Playback = sink
 //
-// No cgo pure-Go host sink is wired by default on macOS; NullPlayback is the
-// safe default for headless/tests. Real sinks live in the UI process.
+// Product GUI (internal/ui) calls internal/audio.OpenDefault() when Playback is
+// nil and a host backend is available (macOS/Windows via oto). Headless and
+// tests keep NullPlayback (silent discard). Audio init failure is never
+// session-fatal.
 type PlaybackDriver interface {
 	// Start configures the sink for a new stream (channels, AudioFmt*, Hz).
 	Start(channels int, format uint16, frequency int)

@@ -14,7 +14,7 @@ A greenfield, library-first [SPICE](https://www.spice-space.org/) remote display
 | HTTP CONNECT spiceproxy + TLS CA + `host-subject` pin | Implemented (`internal/connector`) |
 | AuthSpice ticket, multi-channel session | Implemented (`pkg/spice`, session/channel) |
 | Display raw + LZ + **Quic + JPEG + MJPEG streams** | Implemented (`internal/codec`) |
-| Inputs, cursor, **playback (best-effort)** | Implemented |
+| Inputs, cursor, **playback (best-effort)** | Implemented (GUI host sink on macOS/Windows via `internal/audio`; headless NullPlayback) |
 | **vdagent**: clipboard text + monitors config | Implemented (`internal/agent`) — needs `spice-vdagent` in guest |
 | GUI: Send Keys, Edit copy/paste, grab, hotkeys | Implemented (Fyne) |
 | Headless (`--headless`) | Implemented |
@@ -38,7 +38,7 @@ Changelog: [CHANGELOG.md](CHANGELOG.md).
 |-----|----------|
 | [docs/proxmox.md](docs/proxmox.md) | Using Console `.vv`, CONNECT/TLS/ticket, troubleshooting, ticket-expiry messages, manual checklist |
 | [docs/phase2.md](docs/phase2.md) | Clipboard/agent, codecs, audio, packaging APIs |
-| [docs/phase3.md](docs/phase3.md) | GLZ/H.264/USB/WebDAV; H.264 backends; **Linux FFmpeg install** |
+| [docs/phase3.md](docs/phase3.md) | GLZ/H.264/USB/WebDAV; H.264 backends; **Linux FFmpeg install**; host audio |
 | [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md) | Automated vs manual gates, tag readiness for v0.1.0 |
 | [docs/design-spice-viewer-go.md](docs/design-spice-viewer-go.md) | Full systems design |
 | [scripts/milestone0_memo.md](scripts/milestone0_memo.md) | Ticket crypto, CONNECT authority, DN pin decisions |
