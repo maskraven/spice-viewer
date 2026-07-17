@@ -124,10 +124,11 @@ const (
 	MsgMainChannelsList      uint16 = 104 // SPICE_MSG_MAIN_CHANNELS_LIST
 	MsgMainMouseMode         uint16 = 105
 	MsgMainMultiMediaTime    uint16 = 106
-	MsgMainAgentConnected    uint16 = 107
-	MsgMainAgentDisconnected uint16 = 108
-	MsgMainAgentData         uint16 = 109
-	MsgMainAgentToken        uint16 = 110
+	MsgMainAgentConnected       uint16 = 107
+	MsgMainAgentDisconnected    uint16 = 108
+	MsgMainAgentData            uint16 = 109
+	MsgMainAgentToken           uint16 = 110
+	MsgMainAgentConnectedTokens uint16 = 113 // SPICE_MSG_MAIN_AGENT_CONNECTED_TOKENS
 )
 
 // Main channel client messages.

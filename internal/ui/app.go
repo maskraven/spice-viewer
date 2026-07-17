@@ -96,6 +96,20 @@ func RunGUI(ctx context.Context, cfg spice.ConnectConfig) error {
 					if ev.Err != nil {
 						log.Printf("remote-viewer: %v", ev.Err)
 					}
+				case spice.EventClipboard:
+					text := ev.ClipboardText
+					fyne.Do(func() {
+						ui.onGuestClipboard(text)
+					})
+				case spice.EventAgent:
+					fyne.Do(func() {
+						if ev.AgentActive {
+							ui.setStatus("Guest agent connected (clipboard ready)")
+						} else {
+							ui.setStatus("Guest agent disconnected")
+						}
+						ui.refreshStatus()
+					})
 				case spice.EventDisconnected:
 					if ev.Err != nil {
 						setErr(ev.Err)

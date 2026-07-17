@@ -29,6 +29,7 @@ NO_UI_PACKAGES=(
   display
   security
   ux
+  agent
 )
 
 # Load import paths for a go list pattern into the named variable (by ref).

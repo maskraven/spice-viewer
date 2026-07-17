@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/maskraven/virt-viewer/internal/agent"
 	"github.com/maskraven/virt-viewer/internal/channel"
 	"github.com/maskraven/virt-viewer/internal/display"
 	"github.com/maskraven/virt-viewer/internal/protocol"
@@ -53,6 +54,10 @@ type Client struct {
 	cursor   *channel.Cursor
 	playback *channel.Playback
 	pubIn    *Inputs
+	agent    *agent.Session
+
+	mainMu sync.Mutex
+	main   net.Conn
 
 	closed     bool
 	disconnect sync.Once
@@ -349,8 +354,13 @@ func (c *Client) finishDisconnect() {
 	})
 }
 
-// runMain reads post-open main-channel messages (ping, mouse mode, notify).
+// runMain reads post-open main-channel messages (ping, mouse mode, agent).
 func (c *Client) runMain(ctx context.Context, main net.Conn) error {
+	c.mainMu.Lock()
+	c.main = main
+	c.mainMu.Unlock()
+	c.agent = agent.New(&lockedMain{c: c}, c)
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -368,20 +378,125 @@ func (c *Client) runMain(ctx context.Context, main net.Conn) error {
 		switch msg.Type {
 		case protocol.MsgSetAck:
 			if len(msg.Data) >= 4 {
-				_ = protocol.WriteMessage(main, protocol.MsgcAckSync, msg.Data[0:4])
+				_ = c.writeMain(protocol.MsgcAckSync, msg.Data[0:4])
 			}
 		case protocol.MsgPing:
 			if len(msg.Data) >= 12 {
-				_ = protocol.WriteMessage(main, protocol.MsgcPong, msg.Data[:12])
+				_ = c.writeMain(protocol.MsgcPong, msg.Data[:12])
 			}
 		case protocol.MsgMainMouseMode:
 			if c.inputs != nil {
 				_ = c.inputs.HandleMainMouseMode(msg)
 			}
+		case protocol.MsgMainAgentConnected, protocol.MsgMainAgentConnectedTokens:
+			tokens := uint32(0)
+			if len(msg.Data) >= 4 {
+				tokens = uint32(msg.Data[0]) | uint32(msg.Data[1])<<8 | uint32(msg.Data[2])<<16 | uint32(msg.Data[3])<<24
+			}
+			if err := c.agent.HandleMainAgentConnected(tokens); err != nil {
+				log.Printf("spice: agent start: %v", err)
+				c.emit(Event{Type: EventError, Err: err})
+			} else {
+				c.emit(Event{Type: EventAgent, AgentActive: true})
+			}
+		case protocol.MsgMainAgentDisconnected:
+			if c.agent != nil {
+				c.agent.HandleMainAgentDisconnected()
+			}
+			c.emit(Event{Type: EventAgent, AgentActive: false})
+		case protocol.MsgMainAgentData:
+			if c.agent != nil {
+				if err := c.agent.HandleAgentData(msg.Data); err != nil {
+					log.Printf("spice: agent data: %v", err)
+				}
+			}
+		case protocol.MsgMainAgentToken:
+			n := uint32(1)
+			if len(msg.Data) >= 4 {
+				n = uint32(msg.Data[0]) | uint32(msg.Data[1])<<8 | uint32(msg.Data[2])<<16 | uint32(msg.Data[3])<<24
+			}
+			if c.agent != nil {
+				c.agent.AddTokens(n)
+			}
 		default:
-			// NOTIFY, agent, migrate, … ignored in Phase 1.
+			// NOTIFY, migrate, …
 		}
 	}
+}
+
+type lockedMain struct{ c *Client }
+
+func (l *lockedMain) Write(p []byte) (int, error) {
+	l.c.mainMu.Lock()
+	defer l.c.mainMu.Unlock()
+	if l.c.main == nil {
+		return 0, fmt.Errorf("spice: main closed")
+	}
+	return l.c.main.Write(p)
+}
+
+func (c *Client) writeMain(typ uint16, body []byte) error {
+	c.mainMu.Lock()
+	defer c.mainMu.Unlock()
+	if c.main == nil {
+		return fmt.Errorf("spice: main closed")
+	}
+	return protocol.WriteMessage(c.main, typ, body)
+}
+
+// GuestGrabbed implements agent.ClipboardHandler.
+func (c *Client) GuestGrabbed(selection uint8, types []uint32) {
+	for _, t := range types {
+		if t == agent.ClipboardUTF8Text {
+			if err := c.agent.RequestGuestClipboard(); err != nil {
+				log.Printf("spice: clipboard request: %v", err)
+			}
+			return
+		}
+	}
+}
+
+// GuestData implements agent.ClipboardHandler.
+func (c *Client) GuestData(selection uint8, typ uint32, data []byte) {
+	if typ != agent.ClipboardUTF8Text {
+		return
+	}
+	c.emit(Event{Type: EventClipboard, ClipboardText: string(data)})
+}
+
+// GuestReleased implements agent.ClipboardHandler.
+func (c *Client) GuestReleased(selection uint8) {}
+
+// SetHostClipboard pushes UTF-8 text to the guest via vdagent (Phase 2).
+func (c *Client) SetHostClipboard(text string) error {
+	if c == nil || c.agent == nil {
+		return fmt.Errorf("spice: agent not available")
+	}
+	return c.agent.SetHostClipboard(text)
+}
+
+// RequestGuestClipboard asks the guest for clipboard text via vdagent.
+func (c *Client) RequestGuestClipboard() error {
+	if c == nil || c.agent == nil {
+		return fmt.Errorf("spice: agent not available")
+	}
+	return c.agent.RequestGuestClipboard()
+}
+
+// SetGuestDisplaySize asks the guest to resize via agent monitors config.
+func (c *Client) SetGuestDisplaySize(width, height uint32) error {
+	if c == nil || c.agent == nil {
+		return fmt.Errorf("spice: agent not available")
+	}
+	return c.agent.SendMonitorsConfig(width, height)
+}
+
+// AgentActive reports whether the guest agent is connected with capabilities.
+func (c *Client) AgentActive() bool {
+	if c == nil || c.agent == nil {
+		return false
+	}
+	return c.agent.Active()
 }
 
 // Events returns the lifecycle event channel.

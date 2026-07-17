@@ -7,6 +7,13 @@ import (
 	"fmt"
 
 	"github.com/maskraven/virt-viewer/internal/channel"
+	"github.com/maskraven/virt-viewer/internal/protocol"
+)
+
+// Mouse mode bits (SPICE_MOUSE_MODE_*), matching MAIN_INIT / MAIN_MOUSE_MODE.
+const (
+	MouseModeServer = protocol.MouseModeServer // relative motion
+	MouseModeClient = protocol.MouseModeClient // absolute position
 )
 
 // Inputs is the public keyboard/mouse inject surface for a live Client.
@@ -65,4 +72,9 @@ func (i *Inputs) MouseMode() uint32 {
 		return 0
 	}
 	return i.in.MouseMode()
+}
+
+// ClientMouse reports whether absolute (CLIENT) mouse mode is active.
+func (i *Inputs) ClientMouse() bool {
+	return i.MouseMode() == MouseModeClient
 }

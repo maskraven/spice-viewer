@@ -4,11 +4,15 @@
 // Package ui is the Fyne GUI surface for remote-viewer.
 //
 // It implements spice.DisplayDriver (Present / desktop size / invalidate),
-// keyboard grab, and virt-viewer hotkey semantics:
+// keyboard/mouse grab, virt-viewer hotkeys, and daily-use controls:
 //
-//   - secure-attention chord → inject guest Ctrl+Alt+Del (CAD), not the chord keys
-//   - release-cursor → ungrab
-//   - toggle-fullscreen → window fullscreen toggle
+//   - Main menu: File, Edit, View, Send Keys, Help
+//   - Send Keys: Ctrl+Alt+Del, Ctrl+Alt+Fn, Super, Alt+Tab, Type text… (US QWERTY)
+//   - Toolbar: CAD, ungrab, fullscreen, paste, type text
+//   - Status bar: connection title, grab state, mouse mode, agent on/off
+//   - Clipboard: Edit → Copy/Paste via vdagent; TypeText fallback when agent offline
+//   - secure-attention chord → guest Ctrl+Alt+Del (not the local chord keys)
+//   - release-cursor → ungrab; toggle-fullscreen → window fullscreen
 //
 // Import rules: may import pkg/spice, pkg/vvfile, and internal/ux.
 // cmd/remote-viewer may import this package.

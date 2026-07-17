@@ -15,18 +15,21 @@ import (
 	"github.com/maskraven/virt-viewer/pkg/spice"
 )
 
-// sessionUI owns the Fyne window, grab state, and hotkey handling for one
-// live SPICE client.
+// sessionUI owns the Fyne window, grab state, menus, and hotkey handling for
+// one live SPICE client.
 type sessionUI struct {
 	app     fyne.App
 	win     fyne.Window
 	view    *guestView
 	surface *Surface
+	pad     *mousePad
 	grab    Grab
 	bind    Bindings
 
-	client *spice.Client
-	inputs *spice.Inputs
+	client  *spice.Client
+	inputs  *spice.Inputs
+	toolbar *fyne.Container
+	status  *widget.Label
 
 	mu     sync.Mutex
 	mods   uint8 // currently pressed modifiers (host)
@@ -48,10 +51,17 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 		surface: surface,
 		bind:    bind,
 		fs:      startFullscreen,
+		status:  widget.NewLabel("Connecting…"),
 	}
+	ui.status.Truncation = fyne.TextTruncateEllipsis
 
 	pad := newMousePad(ui, view)
-	win.SetContent(container.NewStack(pad))
+	ui.pad = pad
+	ui.installMenus()
+
+	// Layout: toolbar | guest display | status bar
+	content := container.NewBorder(ui.toolbar, ui.status, nil, nil, pad)
+	win.SetContent(content)
 	win.Resize(fyne.NewSize(1024, 768))
 	win.SetMaster()
 
@@ -59,6 +69,7 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 		win.SetFullScreen(true)
 	}
 	ui.wireKeys()
+	ui.refreshStatus()
 	return ui
 }
 
@@ -71,10 +82,12 @@ func (ui *sessionUI) AttachClient(c *spice.Client) {
 			ui.win.SetTitle(t)
 		}
 	}
+	ui.refreshStatus()
 }
 
 func (ui *sessionUI) wireKeys() {
-	// Prefer desktop.Canvas for raw key down/up (modifiers + non-printables).
+	// Prefer desktop.Canvas for raw key down/up (modifiers + letters).
+	// Do not also wire TypedRune here — that double-fires printables on some OS.
 	if dc, ok := ui.win.Canvas().(desktop.Canvas); ok {
 		dc.SetOnKeyDown(ui.onKeyDown)
 		dc.SetOnKeyUp(ui.onKeyUp)
@@ -83,6 +96,35 @@ func (ui *sessionUI) wireKeys() {
 	ui.win.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
 		ui.onKeyDown(ev)
 	})
+	// No desktop canvas: TypedRune is the only path for many letters.
+	ui.win.Canvas().SetOnTypedRune(ui.onTypedRune)
+}
+
+func (ui *sessionUI) onTypedRune(r rune) {
+	if ui.inputs == nil {
+		return
+	}
+	if r < 0x20 {
+		return
+	}
+	sc := letterScancode(r)
+	if sc == 0 {
+		sc = digitScancode(r)
+	}
+	if sc == 0 {
+		return
+	}
+	if !ui.grab.Active() {
+		ui.enterGrab()
+	}
+	// TypedRune is press-only; synthesize down/up for the guest.
+	if err := ui.inputs.KeyDown(sc); err != nil {
+		log.Printf("ui: key down (rune): %v", err)
+		return
+	}
+	if err := ui.inputs.KeyUp(sc); err != nil {
+		log.Printf("ui: key up (rune): %v", err)
+	}
 }
 
 func (ui *sessionUI) onKeyDown(ev *fyne.KeyEvent) {
@@ -117,10 +159,14 @@ func (ui *sessionUI) onKeyDown(ev *fyne.KeyEvent) {
 	}
 
 	if !ui.grab.Active() {
-		return
+		// First key while unfocused-grab: auto-grab so typing works without an
+		// extra click (still click-to-grab for mouse-only paths).
+		ui.enterGrab()
 	}
 	if sc := fyneKeyScancode(name); sc != 0 && ui.inputs != nil {
-		_ = ui.inputs.KeyDown(sc)
+		if err := ui.inputs.KeyDown(sc); err != nil {
+			log.Printf("ui: key down: %v", err)
+		}
 	}
 }
 
@@ -141,16 +187,31 @@ func (ui *sessionUI) onKeyUp(ev *fyne.KeyEvent) {
 		return
 	}
 	if sc := fyneKeyScancode(name); sc != 0 && ui.inputs != nil {
-		_ = ui.inputs.KeyUp(sc)
+		if err := ui.inputs.KeyUp(sc); err != nil {
+			log.Printf("ui: key up: %v", err)
+		}
 	}
 }
 
 func (ui *sessionUI) releaseGrab() {
 	ui.grab.Release()
+	if ui.pad != nil {
+		ui.pad.resetMotion()
+		ui.pad.Refresh()
+	}
+	ui.refreshStatus()
 }
 
 func (ui *sessionUI) enterGrab() {
 	ui.grab.Grab()
+	if ui.pad != nil {
+		ui.pad.resetMotion()
+		ui.pad.Refresh()
+	}
+	// Ensure the window receives key events after grab (macOS focus quirks).
+	ui.win.Canvas().Focus(nil)
+	ui.win.RequestFocus()
+	ui.refreshStatus()
 }
 
 func (ui *sessionUI) toggleFullscreen() {
@@ -159,6 +220,7 @@ func (ui *sessionUI) toggleFullscreen() {
 	fs := ui.fs
 	ui.mu.Unlock()
 	ui.win.SetFullScreen(fs)
+	ui.refreshStatus()
 }
 
 func (ui *sessionUI) updateScaleHint() {
@@ -173,12 +235,20 @@ type mousePad struct {
 	widget.BaseWidget
 	ui   *sessionUI
 	view *guestView
+
+	// lastAbs tracks host absolute pointer for SERVER (relative) mouse mode.
+	lastAbsX, lastAbsY float32
+	hasLastAbs         bool
 }
 
 func newMousePad(ui *sessionUI, view *guestView) *mousePad {
 	p := &mousePad{ui: ui, view: view}
 	p.ExtendBaseWidget(p)
 	return p
+}
+
+func (p *mousePad) resetMotion() {
+	p.hasLastAbs = false
 }
 
 func (p *mousePad) CreateRenderer() fyne.WidgetRenderer {
@@ -204,15 +274,26 @@ func (p *mousePad) Cursor() desktop.Cursor {
 func (p *mousePad) MouseDown(ev *desktop.MouseEvent) {
 	if !p.ui.grab.Active() {
 		p.ui.enterGrab()
+		// Seed position on grab so the next move has a relative baseline.
+		if ev != nil {
+			p.lastAbsX = ev.AbsolutePosition.X
+			p.lastAbsY = ev.AbsolutePosition.Y
+			p.hasLastAbs = true
+			p.sendMousePosition(ev)
+		}
 		p.Refresh()
 		return
 	}
 	if p.ui.inputs == nil || ev == nil {
 		return
 	}
+	// Keep absolute position in sync before button events (CLIENT mode).
+	p.sendMousePosition(ev)
 	btn := mapMouseButton(ev.Button)
 	if btn != 0 {
-		_ = p.ui.inputs.MouseButton(btn, true)
+		if err := p.ui.inputs.MouseButton(btn, true); err != nil {
+			log.Printf("ui: mouse button down: %v", err)
+		}
 	}
 }
 
@@ -222,12 +303,43 @@ func (p *mousePad) MouseUp(ev *desktop.MouseEvent) {
 	}
 	btn := mapMouseButton(ev.Button)
 	if btn != 0 {
-		_ = p.ui.inputs.MouseButton(btn, false)
+		if err := p.ui.inputs.MouseButton(btn, false); err != nil {
+			log.Printf("ui: mouse button up: %v", err)
+		}
 	}
 }
 
 func (p *mousePad) MouseMoved(ev *desktop.MouseEvent) {
 	if !p.ui.grab.Active() || p.ui.inputs == nil || ev == nil {
+		return
+	}
+	if p.ui.inputs.ClientMouse() {
+		p.sendMousePosition(ev)
+		return
+	}
+
+	// SERVER mode: SPICE expects relative deltas, not absolute widget coords.
+	ax, ay := ev.AbsolutePosition.X, ev.AbsolutePosition.Y
+	if !p.hasLastAbs {
+		p.lastAbsX, p.lastAbsY = ax, ay
+		p.hasLastAbs = true
+		return
+	}
+	dx := int32(ax - p.lastAbsX)
+	dy := int32(ay - p.lastAbsY)
+	p.lastAbsX, p.lastAbsY = ax, ay
+	if dx == 0 && dy == 0 {
+		return
+	}
+	if err := p.ui.inputs.MouseMove(dx, dy); err != nil {
+		log.Printf("ui: mouse move: %v", err)
+	}
+}
+
+// sendMousePosition maps the widget-local pointer into guest surface coords and
+// injects an absolute MouseMove (CLIENT mode) or seeds position for later use.
+func (p *mousePad) sendMousePosition(ev *desktop.MouseEvent) {
+	if p.ui.inputs == nil || ev == nil {
 		return
 	}
 	gw, gh := p.ui.surface.Size()
@@ -238,13 +350,40 @@ func (p *mousePad) MouseMoved(ev *desktop.MouseEvent) {
 	if sz.Width <= 0 || sz.Height <= 0 {
 		return
 	}
-	x := int32(float32(gw) * (ev.Position.X / sz.Width))
-	y := int32(float32(gh) * (ev.Position.Y / sz.Height))
-	_ = p.ui.inputs.MouseMove(x, y)
+	// Clamp local position into the pad.
+	lx, ly := ev.Position.X, ev.Position.Y
+	if lx < 0 {
+		lx = 0
+	}
+	if ly < 0 {
+		ly = 0
+	}
+	if lx > sz.Width {
+		lx = sz.Width
+	}
+	if ly > sz.Height {
+		ly = sz.Height
+	}
+	x := int32(float32(gw) * (lx / sz.Width))
+	y := int32(float32(gh) * (ly / sz.Height))
+	if x >= int32(gw) && gw > 0 {
+		x = int32(gw) - 1
+	}
+	if y >= int32(gh) && gh > 0 {
+		y = int32(gh) - 1
+	}
+	// Only send absolute messages when in CLIENT mode (MouseMove branches).
+	if p.ui.inputs.ClientMouse() {
+		if err := p.ui.inputs.MouseMove(x, y); err != nil {
+			log.Printf("ui: mouse position: %v", err)
+		}
+	}
 }
 
 func (p *mousePad) MouseIn(*desktop.MouseEvent) {}
-func (p *mousePad) MouseOut()                   {}
+func (p *mousePad) MouseOut() {
+	p.hasLastAbs = false
+}
 
 func (p *mousePad) Scrolled(ev *fyne.ScrollEvent) {
 	if !p.ui.grab.Active() || p.ui.inputs == nil || ev == nil {
@@ -255,7 +394,9 @@ func (p *mousePad) Scrolled(ev *fyne.ScrollEvent) {
 		delta = int(ev.Scrolled.DX)
 	}
 	if delta != 0 {
-		_ = p.ui.inputs.MouseWheel(delta)
+		if err := p.ui.inputs.MouseWheel(delta); err != nil {
+			log.Printf("ui: mouse wheel: %v", err)
+		}
 	}
 }
 

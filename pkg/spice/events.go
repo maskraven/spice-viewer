@@ -18,6 +18,10 @@ const (
 	// EventError reports a non-fatal or pre-disconnect error (e.g. cursor/playback degrade).
 	// Fatal channel failures also emit EventDisconnected (not only EventError).
 	EventError
+	// EventClipboard is emitted when the guest provides clipboard text (vdagent).
+	EventClipboard
+	// EventAgent reports agent connect/disconnect (non-fatal).
+	EventAgent
 )
 
 // Event is a lifecycle notification delivered on Client.Events.
@@ -25,8 +29,10 @@ const (
 // Channel is buffered; slow consumers may drop only if the buffer fills
 // (emit is best-effort non-blocking for Error; Connected/Disconnected wait briefly).
 type Event struct {
-	Type EventType
-	Err  error // optional; set for Disconnected (fatal) and Error
+	Type          EventType
+	Err           error  // optional; set for Disconnected (fatal) and Error
+	ClipboardText string // set for EventClipboard (UTF-8)
+	AgentActive   bool   // set for EventAgent
 }
 
 func (t EventType) String() string {
@@ -37,6 +43,10 @@ func (t EventType) String() string {
 		return "disconnected"
 	case EventError:
 		return "error"
+	case EventClipboard:
+		return "clipboard"
+	case EventAgent:
+		return "agent"
 	default:
 		return "unknown"
 	}
