@@ -8,7 +8,16 @@ Product packaging for **spice-viewer** on Linux, macOS, and Windows.
 | **macOS** | **`.app`**, **`.dmg`**, app zip | `scripts/macos/build-product.sh` on a Mac |
 | **Windows** | **`.exe`** (GUI), **zip**, optional **NSIS setup** | `scripts/windows/build-product.ps1` on Windows |
 
-CI: [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds all three on tag push (`v*`) and attaches a **draft** GitHub Release.
+CI: [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds on tag push (`v*`) or manual **workflow_dispatch**, then attaches a **draft** GitHub Release.
+
+| Matrix cell | Runner | Output |
+|-------------|--------|--------|
+| Linux amd64 | `ubuntu-latest` | tar.gz, deb, rpm |
+| Linux arm64 | `ubuntu-24.04-arm` | tar.gz, deb, rpm |
+| macOS universal | `macos-latest` | `.app` zip + `.dmg` (arm64+amd64 lipo) |
+| Windows amd64 | `windows-latest` | zip (+ NSIS setup when available) |
+
+Goreleaser uses **`--single-target`** so each Linux job only builds its native arch (Fyne/CGO does not cross-compile).
 
 **Important:** Fyne and OS codecs need **native** `CGO_ENABLED=1` builds:
 

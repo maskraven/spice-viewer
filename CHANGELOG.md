@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Product rename**: CLI and packages are now **`spice-viewer`** (was `remote-viewer`).
   Paths: `cmd/spice-viewer`, desktop/MIME/icons, macOS **SPICE Viewer.app**, Windows setup.
   Go module path remains `github.com/maskraven/virt-viewer` for import stability.
+- **Release CI**: multi-arch packages — Linux **amd64 + arm64** (native runners),
+  macOS **universal**, Windows **amd64**; draft GitHub Release on `v*` tags.
 
 ### Packaging (all platforms)
 

@@ -74,7 +74,15 @@ go build -ldflags "-X main.Version=v0.1.0" -o spice-viewer ./cmd/spice-viewer
 | Windows | `.\scripts\windows\build-product.ps1 -Version v0.2.0` | `.exe`, zip, optional NSIS setup |
 
 Details, MIME/`.vv` associations, and signing notes: **[packaging/README.md](packaging/README.md)**.  
-Tag releases (`v*`) run [`.github/workflows/release.yml`](.github/workflows/release.yml) on Linux / macOS / Windows runners and draft a GitHub Release.
+Tag releases (`v*`) run [`.github/workflows/release.yml`](.github/workflows/release.yml):
+
+| OS | Arches |
+|----|--------|
+| Linux | **amd64** + **arm64** (separate native runners) |
+| macOS | **universal** (arm64 + amd64) |
+| Windows | **amd64** |
+
+Artifacts attach to a **draft** GitHub Release.
 
 Fyne pulls platform GUI dependencies on first build (OpenGL / OS window stack). Headless CI and dogfood use `--headless` and do not require a display for the NullDriver path.
 

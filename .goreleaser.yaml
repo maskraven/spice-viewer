@@ -1,6 +1,12 @@
-# Goreleaser OSS — Linux product packages (run on Linux with CGO).
-# macOS .app/.dmg  → scripts/macos/build-product.sh  (macos-latest)
-# Windows exe/zip  → scripts/windows/build-product.ps1 (windows-latest)
+# Goreleaser OSS — Linux product packages (native CGO only).
+#
+# CI runs with --single-target on each arch runner:
+#   ubuntu-latest     → linux/amd64
+#   ubuntu-24.04-arm  → linux/arm64
+# Do not cross-compile Fyne/CGO between arches.
+#
+# macOS .app/.dmg  → scripts/macos/build-product.sh  (universal lipo)
+# Windows exe/zip  → scripts/windows/build-product.ps1 (windows-latest amd64)
 # See packaging/README.md and .github/workflows/release.yml
 version: 2
 
@@ -21,6 +27,7 @@ builds:
     goarch:
       - amd64
       - arm64
+    # With --single-target, only the host arch is built.
     ldflags:
       - -s -w -X main.Version={{.Version}}
 

@@ -1,5 +1,13 @@
-# Build product packages on native runners (CGO / Fyne / OS codecs).
-# Trigger: push of version tags (v*) or manual workflow_dispatch.
+# Product packages on native runners (CGO / Fyne / OS codecs).
+#
+# Architectures:
+#   Linux   — amd64 (ubuntu-latest) + arm64 (ubuntu-24.04-arm), each with tar.gz/deb/rpm
+#   macOS   — universal binary (arm64 + amd64 lipo) → .app / .dmg / zip
+#   Windows — amd64 only (Media Foundation product path)
+#
+# Triggers: version tags (v*) or manual workflow_dispatch.
+# Requires this file on the default branch for workflow_dispatch from the UI;
+# tag pushes work once the tag points at a commit that includes this workflow.
 name: Release
 
 on:
@@ -9,17 +17,36 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version stamp (e.g. v0.2.0-dev); defaults to tag or snapshot"
+        description: "Version stamp when not on a tag (e.g. v0.2.0-dev)"
         required: false
         default: ""
+      publish:
+        description: "Create/update a draft GitHub Release (tags always publish draft)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
 
+env:
+  GO_VERSION: "1.22.x"
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # Linux: one job per arch (CGO cannot cross-compile Fyne reliably).
+  # ---------------------------------------------------------------------------
   linux:
-    name: Linux packages
-    runs-on: ubuntu-latest
+    name: Linux ${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            goarch: arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,14 +54,26 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Install Fyne / OpenGL build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev \
+            gcc pkg-config \
+            libgl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev \
             libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-snapshot+${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -43,70 +82,96 @@ jobs:
           version: "~> v2"
           install-only: true
 
-      - name: Build (snapshot or release)
+      - name: Build packages (native arch only)
         env:
           CGO_ENABLED: "1"
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
+          # --single-target: only current GOOS/GOARCH (this matrix cell).
+          # Avoids CGO cross-compile to the other Linux arch on this runner.
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            goreleaser release --clean --skip=publish
+            goreleaser release --clean --skip=publish --single-target
           else
-            goreleaser release --snapshot --clean --skip=publish
+            # Snapshot + stamp version for non-tag runs
+            goreleaser release --snapshot --clean --skip=publish --single-target
           fi
+          # Normalize into dist/linux for artifact upload
+          mkdir -p dist/linux
+          find dist -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name 'checksums.txt' \) \
+            -exec cp -v {} dist/linux/ \; || true
+          # Fallback tarball if goreleaser produced only a binary
+          if ! ls dist/linux/*.tar.gz >/dev/null 2>&1; then
+            VERSION="${{ steps.ver.outputs.version }}" ./scripts/linux/build-product.sh
+          fi
+          ls -la dist/linux/ dist/ || true
 
-      - name: Upload Linux artifacts
+      - name: Upload Linux ${{ matrix.goarch }}
         uses: actions/upload-artifact@v4
         with:
-          name: linux-packages
+          name: linux-${{ matrix.goarch }}
           path: |
+            dist/linux/*
             dist/*.tar.gz
             dist/*.deb
             dist/*.rpm
             dist/checksums.txt
-          if-no-files-found: warn
+          if-no-files-found: error
 
+  # ---------------------------------------------------------------------------
+  # macOS: universal arm64+amd64 .app / .dmg
+  # ---------------------------------------------------------------------------
   macos:
-    name: macOS app + dmg
+    name: macOS universal
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-snapshot+${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build product (.app, .dmg, zip)
         env:
           CGO_ENABLED: "1"
           MACOSX_DEPLOYMENT_TARGET: "11.0"
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           chmod +x scripts/macos/*.sh
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            export VERSION="${GITHUB_REF_NAME}"
-          elif [[ -n "${{ inputs.version }}" ]]; then
-            export VERSION="${{ inputs.version }}"
-          else
-            export VERSION="0.0.0-snapshot"
-          fi
           ./scripts/macos/build-product.sh
+          lipo -info dist/macos/spice-viewer
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-packages
+          name: macos-universal
           path: |
             dist/macos/*.dmg
             dist/macos/*-macos-app.zip
           if-no-files-found: error
 
+  # ---------------------------------------------------------------------------
+  # Windows: amd64 GUI exe + zip (+ NSIS when available)
+  # ---------------------------------------------------------------------------
   windows:
-    name: Windows exe + zip (+ NSIS)
+    name: Windows amd64
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Install MinGW (cgo)
         uses: msys2/setup-msys2@v2
@@ -121,34 +186,43 @@ jobs:
         run: choco install nsis -y
         continue-on-error: true
 
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-snapshot+${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build product
         shell: pwsh
         env:
           CGO_ENABLED: "1"
         run: |
           $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
-          if ("${{ github.ref_type }}" -eq "tag") {
-            $ver = $env:GITHUB_REF_NAME
-          } elseif ("${{ inputs.version }}" -ne "") {
-            $ver = "${{ inputs.version }}"
-          } else {
-            $ver = "0.0.0-snapshot"
-          }
-          .\scripts\windows\build-product.ps1 -Version $ver
+          .\scripts\windows\build-product.ps1 -Version "${{ steps.ver.outputs.version }}"
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-packages
+          name: windows-amd64
           path: |
             dist/windows/*.zip
-            dist/windows/*.exe
+            dist/windows/*setup*.exe
+            dist/windows/spice-viewer.exe
           if-no-files-found: error
 
+  # ---------------------------------------------------------------------------
+  # Draft GitHub Release (tags always; workflow_dispatch if publish=true)
+  # ---------------------------------------------------------------------------
   publish:
-    name: Attach to GitHub Release
+    name: Draft GitHub Release
     needs: [linux, macos, windows]
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || inputs.publish == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -160,16 +234,26 @@ jobs:
       - name: Collect release files
         run: |
           mkdir -p release-assets
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.exe' -o -name 'checksums.txt' \) \
-            -exec cp -v {} release-assets/ \;
-          (cd release-assets && sha256sum * > checksums-all.txt || shasum -a 256 * > checksums-all.txt)
-          ls -la release-assets
+          find artifacts -type f \( \
+              -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' \
+              -o -name '*.dmg' -o -name 'spice-viewer*.exe' -o -name '*setup*.exe' \
+              -o -name 'checksums*.txt' \
+            \) -exec cp -v {} release-assets/ \;
+          # Drop bare spice-viewer.exe if zip is present (prefer portable zip)
+          cd release-assets
+          if ls spice-viewer_*_windows_*.zip >/dev/null 2>&1; then
+            rm -f spice-viewer.exe || true
+          fi
+          sha256sum * > SHA256SUMS.txt 2>/dev/null || shasum -a 256 * > SHA256SUMS.txt
+          ls -la
 
       - name: Create draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || format('snapshot-{0}', github.sha) }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || 'Snapshot build' }}
           draft: true
-          generate_release_notes: true
+          generate_release_notes: ${{ github.ref_type == 'tag' }}
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
