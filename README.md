@@ -37,6 +37,7 @@ Changelog: [CHANGELOG.md](CHANGELOG.md).
 | Doc | Contents |
 |-----|----------|
 | [docs/proxmox.md](docs/proxmox.md) | Using Console `.vv`, CONNECT/TLS/ticket, troubleshooting, ticket-expiry messages, manual checklist |
+| [docs/phase2.md](docs/phase2.md) | Clipboard/agent, codecs, audio, packaging APIs |
 | [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md) | Automated vs manual gates, tag readiness for v0.1.0 |
 | [docs/design-spice-viewer-go.md](docs/design-spice-viewer-go.md) | Full systems design |
 | [scripts/milestone0_memo.md](scripts/milestone0_memo.md) | Ticket crypto, CONNECT authority, DN pin decisions |
