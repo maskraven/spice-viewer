@@ -6,7 +6,8 @@
 package h264
 
 /*
-#cgo LDFLAGS: -lmfplat -lmf -lmfuuid -lole32 -lwmcodecdspuuid
+// -luuid provides IID_IUnknown etc. (required for MinGW/cross-link).
+#cgo LDFLAGS: -lmfplat -lmf -lmfuuid -lole32 -luuid -lwmcodecdspuuid
 
 // Media Foundation H.264 decoder (CLSID_CMSH264DecoderMFT).
 //
@@ -126,12 +127,17 @@ static int mf_configure_input(mf_dec *d, UINT32 hint_w, UINT32 hint_h) {
 	return SUCCEEDED(hr) ? 0 : (int)hr;
 }
 
+// CODECAPI_AVLowLatencyMode GUID (codecapi.h). Declared here so MinGW/cross
+// builds work without MSVC __uuidof(CODECAPI_AVLowLatencyMode).
+static const GUID kCODECAPI_AVLowLatencyMode = {
+	0xb980ea2f, 0x5e73, 0x4b8d, {0xa5, 0xdf, 0x8e, 0x71, 0xb1, 0xf1, 0xa6, 0x61}};
+
 static int mf_enable_low_latency(IMFTransform *xf) {
 	IMFAttributes *attrs = NULL;
 	HRESULT hr = xf->lpVtbl->GetAttributes(xf, &attrs);
 	if (FAILED(hr) || !attrs) return 0; // optional
-	// CODECAPI_AVLowLatencyMode — best-effort (Windows 8+).
-	attrs->lpVtbl->SetUINT32(attrs, &CODECAPI_AVLowLatencyMode, TRUE);
+	// Best-effort (Windows 8+); ignore failures.
+	attrs->lpVtbl->SetUINT32(attrs, &kCODECAPI_AVLowLatencyMode, TRUE);
 	mf_release((IUnknown *)attrs);
 	return 0;
 }
