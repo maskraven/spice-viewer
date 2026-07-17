@@ -28,8 +28,9 @@ import (
 	"github.com/maskraven/virt-viewer/pkg/vvfile"
 )
 
-// Version is set at link time in release builds; default is development.
-var Version = "dev"
+// Version is set at link time in release builds (-X main.Version=…).
+// Default marks the 1.0 beta line when unstamped.
+var Version = "1.0.0-beta"
 
 // exit codes
 const (

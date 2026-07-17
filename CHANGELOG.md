@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta] — 2026-07-17
+
+First public **1.0 beta** of **spice-viewer**: Proxmox-first SPICE client with multi-platform packages.
+
 ### Changed
 
-- **Product rename**: CLI and packages are now **`spice-viewer`** (was `remote-viewer`).
+- **Product rename**: CLI and packages are **`spice-viewer`** (was `remote-viewer`).
   Paths: `cmd/spice-viewer`, desktop/MIME/icons, macOS **SPICE Viewer.app**, Windows setup.
   Go module path remains `github.com/maskraven/virt-viewer` for import stability.
 - **Release CI**: multi-arch packages — Linux **amd64 + arm64** (native runners),
@@ -124,9 +128,10 @@ First cut line for a library-first SPICE client aimed at Proxmox Console `.vv` f
 - HiDPI is best-effort present-path scaling only
 - Default link-time `Version` is `dev` unless set with `-ldflags`
 
-### Tag readiness
+### Tag readiness (historical v0.1)
 
-See [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md#tag-readiness-v010). Creating the `v0.1.0` git tag is an operator step after automated gates (and preferably a signed Proxmox checklist) are green.
+See [docs/acceptance-v0.1.md](docs/acceptance-v0.1.md#tag-readiness-v010).
 
-[Unreleased]: https://github.com/maskraven/virt-viewer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/maskraven/virt-viewer/compare/v1.0.0-beta...HEAD
+[1.0.0-beta]: https://github.com/maskraven/virt-viewer/releases/tag/v1.0.0-beta
 [0.1.0]: https://github.com/maskraven/virt-viewer/releases/tag/v0.1.0

@@ -4,9 +4,9 @@ A greenfield, library-first [SPICE](https://www.spice-space.org/) remote display
 
 **Module:** `github.com/maskraven/virt-viewer` · **License:** [Apache-2.0](LICENSE) · **CLI:** `spice-viewer`
 
-## Status — Phase 2 + Phase 3 stretch on top of v0.1
+## Status — **1.0-beta**
 
-**v0.1** Proxmox MVP is complete. **Phase 2** adds guest agent clipboard, richer codecs, audio playback hooks, and packaging. **Phase 3** (in progress) adds GLZ, H.264, host audio on macOS/Windows, and best-effort channel scaffolds — see [docs/phase3.md](docs/phase3.md).
+**spice-viewer 1.0-beta** ships a Proxmox-first SPICE client with multi-platform packages (Linux amd64/arm64, macOS universal, Windows amd64). Phase 2/3 features (agent clipboard, GLZ, H.264, host audio on macOS/Windows, packaging) are included; some channels remain scaffolds — see [docs/phase3.md](docs/phase3.md).
 
 | Area | State |
 |------|--------|
@@ -62,7 +62,7 @@ go build -o spice-viewer ./cmd/spice-viewer
 Optional release version stamp:
 
 ```bash
-go build -ldflags "-X main.Version=v0.1.0" -o spice-viewer ./cmd/spice-viewer
+go build -ldflags "-X main.Version=v1.0.0-beta" -o spice-viewer ./cmd/spice-viewer
 ```
 
 ### Product packages (all platforms)
@@ -70,8 +70,8 @@ go build -ldflags "-X main.Version=v0.1.0" -o spice-viewer ./cmd/spice-viewer
 | OS | Command (on that OS) | Output |
 |----|----------------------|--------|
 | Linux | `./scripts/linux/build-product.sh` | `tar.gz`, deb, rpm (GoReleaser) |
-| macOS | `VERSION=v0.2.0 ./scripts/macos/build-product.sh` | `.app`, `.dmg`, app zip |
-| Windows | `.\scripts\windows\build-product.ps1 -Version v0.2.0` | `.exe`, zip, optional NSIS setup |
+| macOS | `VERSION=v1.0.0-beta ./scripts/macos/build-product.sh` | `.app`, `.dmg`, app zip |
+| Windows | `.\scripts\windows\build-product.ps1 -Version v1.0.0-beta` | `.exe`, zip, optional NSIS setup |
 
 Details, MIME/`.vv` associations, and signing notes: **[packaging/README.md](packaging/README.md)**.  
 Tag releases (`v*`) run [`.github/workflows/release.yml`](.github/workflows/release.yml):
