@@ -89,21 +89,23 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 	return ui
 }
 
-// statusBar is a hairline + left-aligned, vertically centered caption line.
-// Uses canvas.Text so glyphs are not stuck to the bottom of a padded Label.
+// statusBar is a hairline + status line.
+// Text is left-aligned and vertically middle of the strip (not stuck to the bottom).
 type statusBar struct {
 	widget.BaseWidget
-	text *canvas.Text
-	sep  *canvas.Rectangle
+	text    *canvas.Text
+	sep     *canvas.Rectangle
+	content *fyne.Container // left + vertical-middle around text
 }
 
 func newStatusBar(initial string) *statusBar {
 	txt := canvas.NewText(initial, theme.Color(theme.ColorNameForeground))
 	txt.TextSize = theme.Size(theme.SizeNameCaptionText)
-	txt.TextStyle = fyne.TextStyle{}
 	txt.Alignment = fyne.TextAlignLeading
 	sep := canvas.NewRectangle(theme.Color(theme.ColorNameSeparator))
-	s := &statusBar{text: txt, sep: sep}
+	// Place text at its natural MinSize, left + vertical middle of the content band.
+	content := container.New(&leftVCenterLayout{padX: 8}, txt)
+	s := &statusBar{text: txt, sep: sep, content: content}
 	s.ExtendBaseWidget(s)
 	return s
 }
@@ -119,7 +121,7 @@ func (s *statusBar) SetLine(line string) {
 
 func (s *statusBar) CreateRenderer() fyne.WidgetRenderer {
 	s.ExtendBaseWidget(s)
-	return &statusBarRenderer{bar: s, objects: []fyne.CanvasObject{s.sep, s.text}}
+	return &statusBarRenderer{bar: s, objects: []fyne.CanvasObject{s.sep, s.content}}
 }
 
 func (s *statusBar) MinSize() fyne.Size {
@@ -129,13 +131,72 @@ func (s *statusBar) MinSize() fyne.Size {
 	if sepH < 1 {
 		sepH = 1
 	}
-	// One caption line + small vertical pad (text centered inside this band).
+	// Content band ≈ one caption line + equal air above/below for true middle.
 	textH := th.Size(theme.SizeNameCaptionText)
-	padY := float32(4)
+	if s.text != nil {
+		if mh := s.text.MinSize().Height; mh > textH {
+			textH = mh
+		}
+	}
+	padY := float32(6) // explicit vertical breathing room around the midline
 	return fyne.NewSize(48, sepH+textH+padY*2)
 }
 
-// statusBarRenderer: sep on top edge; text left + vertically centered in the rest.
+// leftVCenterLayout places the child at natural height, left pad, vertical middle.
+// Critical: do not stretch the child taller than MinSize — that parks canvas.Text
+// on the bottom of a tall box.
+type leftVCenterLayout struct {
+	padX float32
+}
+
+func (l *leftVCenterLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 || objects[0] == nil {
+		return
+	}
+	o := objects[0]
+	m := o.MinSize()
+	h := m.Height
+	if h <= 0 {
+		h = theme.Size(theme.SizeNameCaptionText)
+	}
+	if h > size.Height {
+		h = size.Height
+	}
+	// Vertical middle of the content area (equal space above and below).
+	y := (size.Height - h) / 2
+	if y < 0 {
+		y = 0
+	}
+	// Width: use full band for long lines; height stays natural so glyphs stay middle.
+	w := size.Width - l.padX
+	if w < m.Width {
+		// still allow shrink for narrow windows
+		if w < 0 {
+			w = 0
+		}
+	}
+	o.Resize(fyne.NewSize(w, h))
+	o.Move(fyne.NewPos(l.padX, y))
+}
+
+func (l *leftVCenterLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	min := fyne.NewSize(l.padX, 0)
+	for _, o := range objects {
+		if o == nil {
+			continue
+		}
+		m := o.MinSize()
+		if m.Width+l.padX > min.Width {
+			min.Width = m.Width + l.padX
+		}
+		if m.Height > min.Height {
+			min.Height = m.Height
+		}
+	}
+	return min
+}
+
+// statusBarRenderer: separator on top; content fills the rest (v-middle text).
 type statusBarRenderer struct {
 	bar     *statusBar
 	objects []fyne.CanvasObject
@@ -156,24 +217,16 @@ func (r *statusBarRenderer) Layout(size fyne.Size) {
 	r.bar.sep.Resize(fyne.NewSize(size.Width, sepH))
 	r.bar.sep.Move(fyne.NewPos(0, 0))
 
-	padX := float32(8)
-	r.bar.text.Color = theme.Color(theme.ColorNameForeground)
-	r.bar.text.TextSize = th.Size(theme.SizeNameCaptionText)
-	r.bar.text.Alignment = fyne.TextAlignLeading
-
-	// Measure text and center it vertically in the content band (not baseline-bottom).
-	tm := fyne.MeasureText(r.bar.text.Text, r.bar.text.TextSize, r.bar.text.TextStyle)
-	contentH := size.Height - sepH
-	if contentH < 1 {
-		contentH = 1
+	if r.bar.text != nil {
+		r.bar.text.Color = theme.Color(theme.ColorNameForeground)
+		r.bar.text.TextSize = th.Size(theme.SizeNameCaptionText)
+		r.bar.text.Alignment = fyne.TextAlignLeading
 	}
-	y := sepH + (contentH-tm.Height)/2
-	if y < sepH {
-		y = sepH
+	if r.bar.content != nil {
+		// Content band under the hairline — layout centers text vertically here.
+		r.bar.content.Resize(fyne.NewSize(size.Width, size.Height-sepH))
+		r.bar.content.Move(fyne.NewPos(0, sepH))
 	}
-	// Full remaining width so ellipsis-style long lines can still draw left-origin.
-	r.bar.text.Resize(fyne.NewSize(size.Width-padX*2, tm.Height+2))
-	r.bar.text.Move(fyne.NewPos(padX, y))
 }
 
 func (r *statusBarRenderer) MinSize() fyne.Size {
@@ -188,6 +241,9 @@ func (r *statusBarRenderer) Refresh() {
 	if r.bar.text != nil {
 		r.bar.text.Color = theme.Color(theme.ColorNameForeground)
 		r.bar.text.Refresh()
+	}
+	if r.bar.content != nil {
+		r.bar.content.Refresh()
 	}
 	canvas.Refresh(r.bar)
 }
