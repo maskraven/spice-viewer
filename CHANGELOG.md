@@ -22,12 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Linux**: user-provided **FFmpeg** CLI on `PATH` (never bundled; `Available()` only when probe finds h264)
   - Display channel advertises `MULTI_CODEC` + `CODEC_MJPEG` always; `CODEC_H264` only when `h264.Available()`
   - STREAM_CREATE/DATA soft-skips decode failures; install notes in [docs/phase3.md](docs/phase3.md#linux-install-ffmpeg)
+- **GLZ** (pure Go): `codec.GLZWindow` dictionary decoder for `GLZ_RGB` / `ZLIB_GLZ_RGB`;
+  display `resolveImage` path; soft-skip on decode error (no black fill). No cgo/spice-common.
+- **Record / USB redir / WebDAV channel scaffolds** (best-effort; never session-fatal):
+  - Record: `NullRecord` default; `MODE=RAW` + `START_MARK` on START; no PCM from null driver
+  - USB redir: multi-id open; SpiceVMC DATA discard loop; optional filter hook; no libusb
+  - WebDAV: Port+VMC loop; optional `--share-dir` / `ConnectConfig.ShareDir`; partial share UX
+  - Protocol constants + `internal/protocol/{record,vmc}.go`; shared `internal/channel/vmc.go`
+  - See [docs/phase3.md](docs/phase3.md#record--usb--webdav)
 
 #### Planned (Phase 3+)
 
-- GLZ (pure Go)
 - Complete Windows Media Foundation pixel path
-- USB redirection, WebDAV, record channel
+- Real mic capture (`RecordDriver` host backend) and USB host stack (libusb/platform)
+- Full WebDAV/phodav share UX beyond message-loop scaffold
 - Linux host audio (ALSA/Pulse) beyond the current stub
 - Live Proxmox operator sign-off updates in `docs/acceptance-v0.1.md`
 

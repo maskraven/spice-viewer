@@ -12,7 +12,8 @@ import (
 )
 
 // ErrUnsupportedImage is returned when DecodeSpiceImage sees a type that is
-// not yet implemented (GLZ, surface-from-cache, …). Display channel soft-skips these.
+// not handled by the stateless decoder (GLZ needs GLZWindow; surface/from-cache
+// are display-channel concerns). Display soft-skips these when unresolved.
 var ErrUnsupportedImage = errors.New("codec: unsupported image type")
 
 // UnsupportedImageError carries the SpiceImage type byte for skip counters.

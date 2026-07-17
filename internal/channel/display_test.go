@@ -179,7 +179,8 @@ func TestDisplayDrawCopyInvalidQuicSoftSkip(t *testing.T) {
 	}
 }
 
-func TestDisplayDrawCopyUnsupportedGLZSoftSkip(t *testing.T) {
+func TestDisplayDrawCopyBadGLZSoftSkip(t *testing.T) {
+	// Truncated / dummy GLZ payload must soft-skip the draw (decode error), not abort.
 	drv := display.NewNullDriver()
 	comp := display.NewCompositor(drv)
 	ch := channel.NewDisplay(nil, comp)
@@ -193,11 +194,38 @@ func TestDisplayDrawCopyUnsupportedGLZSoftSkip(t *testing.T) {
 
 	body := encodeDrawCopyUnsupportedType(0, image.Rect(0, 0, 2, 2), protocol.ImageTypeGLZRGB)
 	if err := ch.HandleMessage(protocol.MsgDisplayDrawCopy, body); err != nil {
-		t.Fatalf("GLZ DRAW_COPY must soft-skip: %v", err)
+		t.Fatalf("bad GLZ DRAW_COPY must soft-skip: %v", err)
 	}
-	skips := ch.ImageSkipCounts()
-	if skips[protocol.ImageTypeGLZRGB] < 1 {
-		t.Fatalf("expected GLZ image skip, got %v", skips)
+	if ch.DrawSkipCount() < 1 {
+		t.Fatalf("expected draw skip for bad GLZ payload, imageSkips=%v", ch.ImageSkipCounts())
+	}
+}
+
+func TestDisplayDrawCopyGLZOK(t *testing.T) {
+	drv := display.NewNullDriver()
+	comp := display.NewCompositor(drv)
+	ch := channel.NewDisplay(nil, comp)
+
+	var sc [20]byte
+	binary.LittleEndian.PutUint32(sc[4:8], 4)
+	binary.LittleEndian.PutUint32(sc[8:12], 4)
+	binary.LittleEndian.PutUint32(sc[12:16], protocol.SurfaceFmt32xRGB)
+	binary.LittleEndian.PutUint32(sc[16:20], protocol.SurfaceFlagPrimary)
+	_ = ch.HandleMessage(protocol.MsgDisplaySurfaceCreate, sc[:])
+
+	body := encodeDrawCopyGLZ(0, image.Rect(0, 0, 2, 2), 2, 2, 0x11, 0x22, 0x33)
+	if err := ch.HandleMessage(protocol.MsgDisplayDrawCopy, body); err != nil {
+		t.Fatalf("GLZ DRAW_COPY: %v", err)
+	}
+	if ch.DrawSkipCount() != 0 {
+		t.Fatalf("unexpected draw skips: %d", ch.DrawSkipCount())
+	}
+	surf := comp.Surface(0)
+	if surf == nil {
+		t.Fatal("missing surface")
+	}
+	if surf.Pix[0] != 0x33 || surf.Pix[1] != 0x22 || surf.Pix[2] != 0x11 {
+		t.Fatalf("pixel RGB=%02x%02x%02x want 332211", surf.Pix[0], surf.Pix[1], surf.Pix[2])
 	}
 }
 
@@ -548,6 +576,64 @@ func mustEncodeSolidJPEG(w, h int, r, g, b byte) []byte {
 	var buf bytes.Buffer
 	_ = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 95})
 	return buf.Bytes()
+}
+
+
+// encodeDrawCopyGLZ builds DRAW_COPY with a solid-color GLZ_RGB image (pure literals).
+// b,g,r are wire BGR channel values for every pixel (decoded to R,G,B).
+func encodeDrawCopyGLZ(surfaceID uint32, box image.Rectangle, w, h int, b, g, r byte) []byte {
+	base := appendDisplayBase(nil, surfaceID, box)
+	fixed := 36
+	imgOff := len(base) + fixed
+	img := packGLZRGBImage(w, h, b, g, r)
+	body := make([]byte, imgOff+len(img))
+	copy(body, base)
+	off := len(base)
+	binary.LittleEndian.PutUint32(body[off:off+4], uint32(imgOff))
+	off += 4
+	binary.LittleEndian.PutUint32(body[off:off+4], 0)
+	binary.LittleEndian.PutUint32(body[off+4:off+8], 0)
+	binary.LittleEndian.PutUint32(body[off+8:off+12], uint32(h))
+	binary.LittleEndian.PutUint32(body[off+12:off+16], uint32(w))
+	off += 16
+	binary.LittleEndian.PutUint16(body[off:off+2], protocol.RopdOpPut)
+	copy(body[imgOff:], img)
+	return body
+}
+
+// packGLZRGBImage builds SpiceImage type GLZ_RGB with solid BGR pixels (literal stream).
+func packGLZRGBImage(w, h int, b, g, r byte) []byte {
+	n := w * h
+	const maxCopy = 32
+	hdr := make([]byte, 33)
+	binary.BigEndian.PutUint32(hdr[0:4], 0x20205a4c)
+	binary.BigEndian.PutUint32(hdr[4:8], 0x00010001)
+	hdr[8] = 8 | (1 << 4)
+	binary.BigEndian.PutUint32(hdr[9:13], uint32(w))
+	binary.BigEndian.PutUint32(hdr[13:17], uint32(h))
+	binary.BigEndian.PutUint32(hdr[17:21], uint32(w*4))
+	binary.BigEndian.PutUint64(hdr[21:29], 1)
+	binary.BigEndian.PutUint32(hdr[29:33], 0)
+	var compressed []byte
+	compressed = append(compressed, hdr...)
+	for i := 0; i < n; {
+		chunk := n - i
+		if chunk > maxCopy {
+			chunk = maxCopy
+		}
+		compressed = append(compressed, byte(chunk-1))
+		for j := 0; j < chunk; j++ {
+			compressed = append(compressed, b, g, r)
+		}
+		i += chunk
+	}
+	out := make([]byte, protocol.SpiceImageDescSize+4+len(compressed))
+	out[8] = protocol.ImageTypeGLZRGB
+	binary.LittleEndian.PutUint32(out[10:14], uint32(w))
+	binary.LittleEndian.PutUint32(out[14:18], uint32(h))
+	binary.LittleEndian.PutUint32(out[protocol.SpiceImageDescSize:protocol.SpiceImageDescSize+4], uint32(len(compressed)))
+	copy(out[protocol.SpiceImageDescSize+4:], compressed)
+	return out
 }
 
 // encodeDrawCopyLZ builds DRAW_COPY with a solid-color LZ_RGB image (pure literals).

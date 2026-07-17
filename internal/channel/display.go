@@ -112,6 +112,7 @@ type Display struct {
 	drawSkips      int            // other soft-skipped draw/surface ops
 	streams        map[uint32]*displayStream
 	imgCache       *imageCache
+	glzWin         *codec.GLZWindow // Global LZ dictionary (GLZ_RGB / ZLIB_GLZ_RGB)
 	ack            protocol.AckState
 	initSent       bool
 }
@@ -130,6 +131,7 @@ func NewDisplay(conn net.Conn, comp *display.Compositor) *Display {
 		imageSkipTypes: make(map[uint8]int),
 		streams:        make(map[uint32]*displayStream),
 		imgCache:       newImageCache(512),
+		glzWin:         codec.NewGLZWindow(int(protocol.DisplayGlzWindowBytes)),
 	}
 }
 
@@ -233,6 +235,9 @@ func (d *Display) HandleMessage(typ uint16, data []byte) error {
 		return nil
 	case protocol.MsgDisplayReset:
 		d.comp.Reset()
+		if d.glzWin != nil {
+			d.glzWin.Reset()
+		}
 		return nil
 	case protocol.MsgDisplaySurfaceCreate:
 		d.handleSurfaceCreate(data)
@@ -568,6 +573,7 @@ func (d *Display) handleDrawCopy(data []byte) {
 
 // resolveImage decodes a SpiceImage or resolves FROM_CACHE / SURFACE references.
 // CACHE_ME images are stored for later FROM_CACHE draws (critical for live UI).
+// GLZ / ZLIB_GLZ use the channel-scoped dictionary window (stateful).
 func (d *Display) resolveImage(desc []byte) (*codec.RGBA, error) {
 	if len(desc) < protocol.SpiceImageDescSize {
 		return nil, fmt.Errorf("image descriptor short: %d", len(desc))
@@ -575,6 +581,9 @@ func (d *Display) resolveImage(desc []byte) (*codec.RGBA, error) {
 	id := binary.LittleEndian.Uint64(desc[0:8])
 	typ := desc[8]
 	flags := desc[9]
+	width := binary.LittleEndian.Uint32(desc[10:14])
+	height := binary.LittleEndian.Uint32(desc[14:18])
+	payload := desc[protocol.SpiceImageDescSize:]
 
 	switch typ {
 	case protocol.ImageTypeFromCache, protocol.ImageTypeFromCacheLossless:
@@ -597,6 +606,23 @@ func (d *Display) resolveImage(desc []byte) (*codec.RGBA, error) {
 		}
 		// Snapshot surface pixels as RGBA for blit.
 		return surfaceToRGBA(surf), nil
+	case protocol.ImageTypeGLZRGB, protocol.ImageTypeZlibGLZRGB:
+		win := d.glzWin
+		if win == nil {
+			win = codec.NewGLZWindow(int(protocol.DisplayGlzWindowBytes))
+			d.glzWin = win
+		}
+		zlibWrapped := typ == protocol.ImageTypeZlibGLZRGB
+		img, err := win.Decode(payload, zlibWrapped, width, height)
+		if err != nil {
+			return nil, err
+		}
+		if flags&protocol.ImageFlagCacheMe != 0 || flags&protocol.ImageFlagCacheReplaceMe != 0 {
+			d.mu.Lock()
+			d.imgCache.put(id, img)
+			d.mu.Unlock()
+		}
+		return img, nil
 	}
 
 	img, err := codec.DecodeSpiceImage(desc)

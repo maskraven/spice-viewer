@@ -10,7 +10,7 @@ GPL spice-common.
 
 | Area | Target | Default binary |
 |------|--------|----------------|
-| **GLZ** | Pure Go dictionary decoder | Soft-skip until decode lands; no cgo |
+| **GLZ** | Pure Go dictionary decoder | Implemented (`codec.GLZWindow`); no cgo |
 | **H.264 streams** | OS decoder (Win/Mac); user FFmpeg (Linux) | Never bundle FFmpeg in default release |
 | **Record** | Mic / capture channel + driver | Best-effort open; NullRecord default |
 | **USB redirection** | Channel + host filter hooks | Scaffold; host backend optional/platform |
@@ -153,21 +153,44 @@ If decode still fails after install:
 
 ## GLZ
 
-Pure Go only (Apache-2.0). Dictionary window sized via `DISPLAY_INIT`
-`glz_dictionary_window_size` (already sent). No spice-common link.
+Pure Go only (Apache-2.0). No spice-common / cgo link.
 
-Until decode is complete, `SPICE_IMAGE_TYPE_GLZ_RGB` / `ZLIB_GLZ_RGB` continue
-to soft-skip without black-filling dest (display freeze/trail policy from Phase 2).
+| Piece | Location |
+|-------|----------|
+| Bitstream + RGB16/24/32/RGBA | `internal/codec/glz_decode.go` |
+| Dictionary window (image id) | `internal/codec/glz_window.go` |
+| `Decode` / ZLIB unwrap | `internal/codec/glz.go` |
+| Display wiring | `Display.glzWin` + `resolveImage` for `GLZ_RGB` / `ZLIB_GLZ_RGB` |
+
+Dictionary window sized via `DISPLAY_INIT` `glz_dictionary_window_size`
+(`protocol.DisplayGlzWindowBytes`, ~16 MiB). Encoder `win_head_dist` plus a
+local byte budget drive eviction. Decode failures soft-skip the draw without
+black-filling dest (Phase 2 trail policy). Stateless `DecodeSpiceImage` still
+returns `UnsupportedImageError` for GLZ — callers must use `GLZWindow`.
 
 ## Record / USB / WebDAV
 
-| Channel | Open policy | Product behavior |
-|---------|-------------|------------------|
-| Record | Best-effort | `RecordDriver` for PCM capture; NullRecord discards server mode requests |
-| USB redir | Best-effort | Protocol scaffold + filter; no forced libusb |
-| WebDAV / Port | Best-effort | Message loop scaffold; full share UX later |
+| Channel | Open policy | Status | Product behavior |
+|---------|-------------|--------|------------------|
+| **Record** | Best-effort | **Scaffold landed** | `RecordDriver` / `NullRecord` default; on `RECORD_START` client sends `MODE=RAW` + `START_MARK`; **no PCM frames** from NullRecord (silent mic; silence timer omitted). Caps: `VOLUME` only (no OPUS). |
+| **USB redir** | Best-effort | **Scaffold landed** | Opens every listed usbredir channel id; SpiceVMC `DATA` accept/discard (+ optional `VMCHandler` queue); `USBFilter` hook (default allow-all). **No libusb** in default binary. Compressed VMC discarded (LZ4 cap not advertised). |
+| **WebDAV** | Best-effort | **Scaffold landed** | Port+VMC message loop; `PORT_INIT` → client `PORT_EVENT_OPENED`; optional `ConnectConfig.ShareDir` / CLI `--share-dir` (partial share UX). `internal/webdav` client_id framing helpers only. |
+| **Port** (non-WebDAV) | Never | Not opened | No dedicated consumer yet |
 
-Never session-fatal if these fail to open.
+**Policy:** open failures and runtime decode errors are **never session-fatal**. Session continues without mic/USB/share when channels are absent or fail.
+
+### Package layout (channels)
+
+```text
+internal/protocol/record.go   // RECORD_* encode/decode
+internal/protocol/vmc.go      // SpiceVMC DATA / COMPRESSED + PORT_INIT/EVENT
+internal/channel/record.go    // Record + NullRecord
+internal/channel/vmc.go       // shared VMC parse/send helpers
+internal/channel/usbredir.go  // USB redir scaffold
+internal/channel/webdav.go    // WebDAV scaffold
+internal/webdav/              // optional client_id frame helpers
+pkg/spice/record.go           // public RecordDriver / NullRecord
+```
 
 ## Host audio
 
