@@ -39,10 +39,10 @@ func StandardSendKeys() []SendKeyPreset {
 		{Label: "Ctrl+Alt+F12", Keys: []uint16{scanLCtrl, scanLAlt, scanF12}},
 		{Label: "Print Screen", Keys: []uint16{scanPrint}},
 		{Label: "Windows / Super", Keys: []uint16{scanLGUI}},
-		{Label: "Ctrl+Esc (Start menu)", Keys: []uint16{scanLCtrl, scanEscape}},
+		{Label: "Ctrl+Esc", Keys: []uint16{scanLCtrl, scanEscape}},
 		{Label: "Alt+Tab", Keys: []uint16{scanLAlt, scanTab}},
 		{Label: "Alt+F4", Keys: []uint16{scanLAlt, scanF4}},
-		{Label: "Ctrl+Shift+Esc (Task Manager)", Keys: []uint16{scanLCtrl, scanLShift, scanEscape}},
+		{Label: "Ctrl+Shift+Esc", Keys: []uint16{scanLCtrl, scanLShift, scanEscape}},
 	}
 }
 

@@ -255,22 +255,86 @@ func (ui *sessionUI) installChrome() fyne.CanvasObject {
 	return overlay
 }
 
+// keysMenuTheme shrinks Keys popup text/padding (PopUpMenu uses default theme size).
+type keysMenuTheme struct {
+	fyne.Theme
+}
+
+func (t keysMenuTheme) Size(n fyne.ThemeSizeName) float32 {
+	switch n {
+	case theme.SizeNameText, theme.SizeNameCaptionText, theme.SizeNameHeadingText:
+		return 11
+	case theme.SizeNameInlineIcon:
+		return 12
+	case theme.SizeNameInnerPadding, theme.SizeNamePadding:
+		return 3
+	case theme.SizeNameScrollBar:
+		return 8
+	default:
+		return t.Theme.Size(n)
+	}
+}
+
 func (ui *sessionUI) showChromeSendKeysMenu(anchor fyne.CanvasObject) {
 	if ui.win == nil {
 		return
 	}
-	items := make([]*fyne.MenuItem, 0, len(StandardSendKeys())+2)
+	// Compact custom list: Fyne PopUpMenu text is oversized for a dense key list.
+	var pop *widget.PopUp
+	closePop := func() {
+		if pop != nil {
+			pop.Hide()
+		}
+		if ui.chrome != nil {
+			ui.chrome.setMenuOpen(false)
+			ui.scheduleChromeHide()
+		}
+	}
+
+	rows := make([]fyne.CanvasObject, 0, len(StandardSendKeys())+2)
 	for _, p := range StandardSendKeys() {
 		preset := p
-		items = append(items, fyne.NewMenuItem(preset.Label, func() {
+		btn := widget.NewButton(preset.Label, func() {
+			closePop()
 			ui.sendKeys(preset)
-		}))
+		})
+		btn.Alignment = widget.ButtonAlignLeading
+		btn.Importance = widget.LowImportance
+		rows = append(rows, btn)
 	}
-	items = append(items, fyne.NewMenuItemSeparator())
-	items = append(items, fyne.NewMenuItem("Type text…", func() {
+	typeBtn := widget.NewButton("Type text…", func() {
+		closePop()
 		ui.showTypeTextDialog()
-	}))
-	ui.showChromePopup(fyne.NewMenu("", items...), anchor)
+	})
+	typeBtn.Alignment = widget.ButtonAlignLeading
+	typeBtn.Importance = widget.LowImportance
+	rows = append(rows, widget.NewSeparator(), typeBtn)
+
+	list := container.NewVBox(rows...)
+	// Cap height so a long list scrolls; keep width modest.
+	scroll := container.NewVScroll(list)
+	scroll.SetMinSize(fyne.NewSize(200, 280))
+
+	bg := canvas.NewRectangle(color.NRGBA{R: 32, G: 32, B: 36, A: 245})
+	bg.CornerRadius = 4
+	bg.StrokeColor = color.NRGBA{R: 90, G: 90, B: 100, A: 200}
+	bg.StrokeWidth = 1
+	body := container.NewStack(bg, container.NewPadded(scroll))
+	themed := container.NewThemeOverride(body, keysMenuTheme{Theme: theme.Current()})
+
+	if ui.chrome != nil {
+		ui.chrome.setMenuOpen(true)
+		ui.chrome.cancelHide()
+	}
+	pop = widget.NewPopUp(themed, ui.win.Canvas())
+	// Dismiss when clicking outside (Fyne PopUp).
+	// Position under the Keys button.
+	if anchor != nil {
+		pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(anchor)
+		pop.ShowAtPosition(fyne.NewPos(pos.X, pos.Y+anchor.Size().Height+2))
+	} else {
+		pop.Show()
+	}
 }
 
 func (ui *sessionUI) showChromeMoreMenu(anchor fyne.CanvasObject) {
