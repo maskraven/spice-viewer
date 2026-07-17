@@ -457,6 +457,18 @@ func (ui *sessionUI) onKeyDown(ev *fyne.KeyEvent) {
 		return
 	}
 
+	// While grabbed, host Ctrl+V / Cmd+V paste host clipboard into the guest
+	// (otherwise V is typed in the guest against the guest clipboard only).
+	if ui.grab.Active() && !isModifierKey(name) && keyID == "v" {
+		onlyCtrl := mods == ModCtrl
+		onlySuper := mods == ModSuper // macOS Cmd+V
+		if onlyCtrl || onlySuper {
+			// Do not forward V; modifiers already down will be released on KeyUp.
+			ui.pasteToGuest()
+			return
+		}
+	}
+
 	if !ui.grab.Active() {
 		// First key while unfocused-grab: auto-grab so typing works without an
 		// extra click (still click-to-grab for mouse-only paths).

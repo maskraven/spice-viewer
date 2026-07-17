@@ -4,7 +4,6 @@
 package ui
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -52,14 +51,39 @@ func TestTypeText_ASCII(t *testing.T) {
 	}
 }
 
-func TestTypeText_Unsupported(t *testing.T) {
+func TestTypeText_SkipsUnsupportedRunes(t *testing.T) {
 	f := &fakeInputs{}
-	err := TypeText(f, "café")
-	if err == nil {
-		t.Fatal("expected error for non-ASCII")
+	// é is skipped; "caf" is still typed (best-effort paste).
+	if err := TypeText(f, "café"); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("error = %v", err)
+	if len(f.downs) < 3 {
+		t.Fatalf("expected caf typed, downs=%v", f.downs)
+	}
+	// Pure non-US text: nothing typed → error.
+	f2 := &fakeInputs{}
+	err := TypeText(f2, "日本語")
+	if err == nil {
+		t.Fatal("expected error when no supported characters")
+	}
+}
+
+func TestFoldClipboardText_SmartQuotes(t *testing.T) {
+	got := foldClipboardText("\u201chello\u201d \u2013 test\u2026")
+	want := `"hello" - test...`
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestTypeTextBestEffort_Counts(t *testing.T) {
+	f := &fakeInputs{}
+	n, err := TypeTextBestEffort(f, "a\u2019b") // a ' b after fold
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("typed %d want 3", n)
 	}
 }
 

@@ -87,21 +87,68 @@ func CADScancodes() []uint16 {
 // and common punctuation. Unsupported runes return an error naming the rune.
 //
 // This does not require vdagent; it is best-effort for passwords/commands
-// when clipboard redirection is unavailable (Phase 1).
+// when clipboard redirection is unavailable.
 func TypeText(inj KeyInjector, s string) error {
-	if inj == nil {
-		return fmt.Errorf("ui: type text: nil inputs")
+	n, err := TypeTextBestEffort(inj, s)
+	if err != nil {
+		return err
 	}
-	for _, r := range s {
-		keys, err := asciiChord(r)
-		if err != nil {
-			return err
-		}
-		if err := InjectSequence(inj, keys); err != nil {
-			return err
-		}
+	if n == 0 && s != "" {
+		return fmt.Errorf("ui: type text: no supported characters in input")
 	}
 	return nil
+}
+
+// TypeTextBestEffort types s, folding common Unicode (smart quotes, NBSP) to
+// ASCII and skipping remaining unsupported runes. Returns the number of runes
+// successfully typed. err is non-nil only on inject I/O failure (not on skip).
+func TypeTextBestEffort(inj KeyInjector, s string) (typed int, err error) {
+	if inj == nil {
+		return 0, fmt.Errorf("ui: type text: nil inputs")
+	}
+	s = foldClipboardText(s)
+	for _, r := range s {
+		keys, cerr := asciiChord(r)
+		if cerr != nil {
+			continue // skip unsupported; do not abort whole paste
+		}
+		if ierr := InjectSequence(inj, keys); ierr != nil {
+			return typed, ierr
+		}
+		typed++
+	}
+	return typed, nil
+}
+
+// foldClipboardText normalizes host clipboard text for US keystroke paste
+// (macOS often provides curly quotes / NBSP that are not on a US map).
+func foldClipboardText(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\u2018', '\u2019', '\u201a', '\u2032': // ‘ ’ ‚ ′
+			b.WriteByte('\'')
+		case '\u201c', '\u201d', '\u201e', '\u2033': // “ ” „ ″
+			b.WriteByte('"')
+		case '\u2013', '\u2014', '\u2212': // – — −
+			b.WriteByte('-')
+		case '\u00a0', '\u202f', '\u2007': // NBSP / narrow NBSP
+			b.WriteByte(' ')
+		case '\u2026': // …
+			b.WriteString("...")
+		case '\r':
+			// drop CR in CRLF; LF handled as Enter
+		case '\u200b', '\u200c', '\u200d', '\ufeff': // zero-width / BOM
+			// skip
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // asciiChord maps a single rune to a scancode press sequence (shift + key when needed).

@@ -150,25 +150,56 @@ func (ui *sessionUI) pasteToGuest() {
 		dialog.ShowError(fmt.Errorf("clipboard unavailable"), ui.win)
 		return
 	}
-	clip := cb.Content()
-	if !ui.client.AgentActive() {
-		// Fallback: type host clipboard as keystrokes.
-		if clip == "" {
-			dialog.ShowInformation("Paste", "Host clipboard is empty.\nGuest agent not connected — use Type text… or install spice-vdagent in the guest.", ui.win)
-			return
-		}
-		if err := TypeText(ui.inputs, clip); err != nil {
-			dialog.ShowError(fmt.Errorf("agent offline; type-text fallback failed: %w\nInstall spice-vdagent in the guest for real paste", err), ui.win)
-			return
-		}
-		ui.setStatus("Pasted via keystrokes (no agent)")
+	clip := foldClipboardText(cb.Content())
+	if clip == "" {
+		dialog.ShowInformation("Paste", "Host clipboard is empty (or only unsupported characters).", ui.win)
 		return
 	}
-	if err := ui.client.SetHostClipboard(clip); err != nil {
-		dialog.ShowError(err, ui.win)
+
+	// Prefer vdagent when fully active: offer clipboard, then inject Ctrl+V so
+	// text appears in the focused guest control (spice-gtk only shares the
+	// clipboard; users still expect the Paste button to paste).
+	if ui.client.AgentActive() {
+		if err := ui.client.SetHostClipboard(clip); err != nil {
+			log.Printf("ui: agent paste failed, falling back to keystrokes: %v", err)
+		} else {
+			// Brief yield so the guest agent can process GRAB before REQUEST.
+			time.Sleep(40 * time.Millisecond)
+			if ui.inputs != nil {
+				if err := InjectSequence(ui.inputs, []uint16{scanLCtrl, letterScancode('v')}); err != nil {
+					log.Printf("ui: Ctrl+V after agent grab: %v", err)
+					ui.setStatus("Clipboard offered to guest — press Ctrl+V in guest")
+					return
+				}
+			}
+			ui.setStatus(fmt.Sprintf("Pasted %d chars (agent)", len([]rune(clip))))
+			return
+		}
+	}
+
+	// No agent (or agent failed): type as US-QWERTY keystrokes.
+	if ui.inputs == nil {
+		dialog.ShowError(fmt.Errorf("inputs not connected; cannot type paste"), ui.win)
 		return
 	}
-	ui.setStatus("Clipboard offered to guest (agent)")
+	// Ensure guest is receiving input (matches click-to-type path).
+	if !ui.grab.Active() {
+		ui.enterGrab()
+	}
+	n, err := TypeTextBestEffort(ui.inputs, clip)
+	if n == 0 {
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("paste via keystrokes failed: %w\nInstall SPICE Guest Tools / spice-vdagent for real clipboard", err), ui.win)
+			return
+		}
+		dialog.ShowInformation("Paste", "Nothing could be typed (unsupported characters).\nInstall SPICE Guest Tools / spice-vdagent for full clipboard.", ui.win)
+		return
+	}
+	if err != nil {
+		ui.setStatus(fmt.Sprintf("Pasted %d chars via keys (some skipped)", n))
+		return
+	}
+	ui.setStatus(fmt.Sprintf("Pasted %d chars via keystrokes (no agent)", n))
 }
 
 func (ui *sessionUI) copyFromGuest() {
