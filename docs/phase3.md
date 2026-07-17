@@ -170,27 +170,13 @@ returns `UnsupportedImageError` for GLZ — callers must use `GLZWindow`.
 
 ## Record / USB / WebDAV
 
-| Channel | Open policy | Status | Product behavior |
-|---------|-------------|--------|------------------|
-| **Record** | Best-effort | **Scaffold landed** | `RecordDriver` / `NullRecord` default; on `RECORD_START` client sends `MODE=RAW` + `START_MARK`; **no PCM frames** from NullRecord (silent mic; silence timer omitted). Caps: `VOLUME` only (no OPUS). |
-| **USB redir** | Best-effort | **Scaffold landed** | Opens every listed usbredir channel id; SpiceVMC `DATA` accept/discard (+ optional `VMCHandler` queue); `USBFilter` hook (default allow-all). **No libusb** in default binary. Compressed VMC discarded (LZ4 cap not advertised). |
-| **WebDAV** | Best-effort | **Scaffold landed** | Port+VMC message loop; `PORT_INIT` → client `PORT_EVENT_OPENED`; optional `ConnectConfig.ShareDir` / CLI `--share-dir` (partial share UX). `internal/webdav` client_id framing helpers only. |
-| **Port** (non-WebDAV) | Never | Not opened | No dedicated consumer yet |
+| Channel | Open policy | Product behavior |
+|---------|-------------|------------------|
+| Record | Best-effort | `RecordDriver` for PCM capture; NullRecord discards server mode requests |
+| USB redir | Best-effort | Protocol scaffold + filter; no forced libusb |
+| WebDAV / Port | Best-effort | Message loop scaffold; full share UX later |
 
-**Policy:** open failures and runtime decode errors are **never session-fatal**. Session continues without mic/USB/share when channels are absent or fail.
-
-### Package layout (channels)
-
-```text
-internal/protocol/record.go   // RECORD_* encode/decode
-internal/protocol/vmc.go      // SpiceVMC DATA / COMPRESSED + PORT_INIT/EVENT
-internal/channel/record.go    // Record + NullRecord
-internal/channel/vmc.go       // shared VMC parse/send helpers
-internal/channel/usbredir.go  // USB redir scaffold
-internal/channel/webdav.go    // WebDAV scaffold
-internal/webdav/              // optional client_id frame helpers
-pkg/spice/record.go           // public RecordDriver / NullRecord
-```
+Never session-fatal if these fail to open.
 
 ## Host audio
 
