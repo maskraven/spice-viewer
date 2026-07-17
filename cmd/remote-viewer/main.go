@@ -46,6 +46,8 @@ func main() {
 type options struct {
 	version  bool
 	headless bool
+	// shareDir is an optional host directory for the WebDAV share scaffold.
+	shareDir string
 	// path is the .vv file; empty when no positional was given.
 	path string
 }
@@ -58,6 +60,7 @@ func parseArgs(args []string, stderr io.Writer) (options, error) {
 	fs.SetOutput(stderr)
 	fs.BoolVar(&opts.version, "version", false, "print version and exit")
 	fs.BoolVar(&opts.headless, "headless", false, "run without GUI (NullDriver; for CI and dogfood)")
+	fs.StringVar(&opts.shareDir, "share-dir", "", "optional host directory for WebDAV share scaffold (best-effort)")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: remote-viewer [flags] <file.vv>\n\n")
 		fmt.Fprintf(stderr, "Open a virt-viewer / Proxmox SPICE connection file and establish a session.\n\n")
@@ -69,6 +72,7 @@ func parseArgs(args []string, stderr io.Writer) (options, error) {
 		fmt.Fprintf(stderr, "\nExamples:\n")
 		fmt.Fprintf(stderr, "  remote-viewer pve-spice.vv\n")
 		fmt.Fprintf(stderr, "  remote-viewer --headless pve-spice.vv\n")
+		fmt.Fprintf(stderr, "  remote-viewer --share-dir=$HOME/Public pve-spice.vv\n")
 		fmt.Fprintf(stderr, "  remote-viewer -version\n")
 	}
 	if err := fs.Parse(args); err != nil {
@@ -111,9 +115,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	var runErr error
 	if opts.headless {
-		runErr = runHeadless(ctx, opts.path, stdout, stderr)
+		runErr = runHeadless(ctx, opts.path, opts.shareDir, stdout, stderr)
 	} else {
-		runErr = runGUI(ctx, opts.path, stdout, stderr)
+		runErr = runGUI(ctx, opts.path, opts.shareDir, stdout, stderr)
 	}
 	if runErr != nil {
 		msg := ux.UserMessage(runErr)
@@ -130,7 +134,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // runGUI parses the .vv and runs the Fyne UI (display + grab + hotkeys).
-func runGUI(ctx context.Context, path string, stdout, stderr io.Writer) error {
+func runGUI(ctx context.Context, path, shareDir string, stdout, stderr io.Writer) error {
 	f, err := openConnectionFile(path)
 	if err != nil {
 		return err
@@ -146,6 +150,7 @@ func runGUI(ctx context.Context, path string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	cfg.ShareDir = shareDir
 
 	// Title fallback for empty .vv title.
 	if cfg.Title == "" {
@@ -173,7 +178,7 @@ func runGUI(ctx context.Context, path string, stdout, stderr io.Writer) error {
 
 // runHeadless parses the .vv (with product delete semantics), connects with
 // NullDriver, and waits until the session ends or ctx is cancelled.
-func runHeadless(ctx context.Context, path string, stdout, stderr io.Writer) error {
+func runHeadless(ctx context.Context, path, shareDir string, stdout, stderr io.Writer) error {
 	f, err := openConnectionFile(path)
 	if err != nil {
 		return err
@@ -189,11 +194,13 @@ func runHeadless(ctx context.Context, path string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
-	// Product headless path: NullDriver, null cursor, NullPlayback (no host audio).
+	cfg.ShareDir = shareDir
+	// Product headless path: NullDriver, null cursor, NullPlayback, NullRecord.
 	cfg.Drivers = spice.Drivers{
 		Display:  spice.NewNullDriver(),
 		Cursor:   spice.NewNullCursorDriver(),
 		Playback: spice.NewNullPlayback(),
+		Record:   spice.NewNullRecord(),
 	}
 
 	client, err := spice.Connect(ctx, cfg)

@@ -21,10 +21,10 @@ func TestPhase1OpenPolicy(t *testing.T) {
 		{protocol.ChannelCursor, true, false},
 		{protocol.ChannelMain, false, false},
 		{protocol.ChannelPlayback, true, false}, // Phase 2 best-effort
-		{protocol.ChannelRecord, false, false},
-		{protocol.ChannelUSBRedir, false, false},
-		{protocol.ChannelPort, false, false},
-		{protocol.ChannelWebDAV, false, false},
+		{protocol.ChannelRecord, true, false},   // Phase 3 best-effort
+		{protocol.ChannelUSBRedir, true, false}, // Phase 3 best-effort
+		{protocol.ChannelPort, false, false},    // not opened (no consumer)
+		{protocol.ChannelWebDAV, true, false},   // Phase 3 best-effort
 	}
 	for _, tc := range cases {
 		if got := channel.IsPhase1Open(tc.typ); got != tc.open {

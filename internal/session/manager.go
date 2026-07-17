@@ -37,8 +37,9 @@ const (
 //   - DISPLAY and INPUTS: required (failure is session-fatal)
 //   - CURSOR: best-effort (failure logs a warning; session continues)
 //   - PLAYBACK: best-effort (Phase 2; failure logs a warning; session continues)
+//   - RECORD, USBREDIR (all listed ids), WEBDAV: best-effort (Phase 3 scaffolds)
 //
-// Record, usbredir, port, and webdav are never opened in this phase.
+// Port (non-WebDAV) is not opened. Best-effort open failures never fail the session.
 //
 // Prerequisites: main link complete (DialMain / LinkMain). Children use
 // connection_id = session_id from MAIN_INIT and a fresh ticket encrypt per
@@ -99,6 +100,12 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 			s.cursorErr = nil
 			s.playbackConn = nil
 			s.playbackErr = nil
+			s.recordConn = nil
+			s.recordErr = nil
+			s.usbConns = nil
+			s.usbErrs = nil
+			s.webdavConn = nil
+			s.webdavErr = nil
 			s.connectionID = 0
 			s.mainInit = nil
 			s.channelList = nil
@@ -140,22 +147,36 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 		fatal  bool // display/inputs
 		result *net.Conn
 		errOut *error
+		// usbSlot, when >= 0, stores success into usbResults[usbSlot].
+		usbSlot int
 	}
 
 	var (
 		displayConn, inputsConn, cursorConn, playbackConn net.Conn
-		cursorErr, playbackErr                            error
+		recordConn, webdavConn                            net.Conn
+		cursorErr, playbackErr, recordErr, webdavErr      error
 	)
+	usbResults := make([]USBChannel, len(want.usbredir))
+	usbErrs := make([]error, len(want.usbredir))
 
 	jobs := []openJob{
-		{ch: *want.display, fatal: true, result: &displayConn},
-		{ch: *want.inputs, fatal: true, result: &inputsConn},
+		{ch: *want.display, fatal: true, result: &displayConn, usbSlot: -1},
+		{ch: *want.inputs, fatal: true, result: &inputsConn, usbSlot: -1},
 	}
 	if want.cursor != nil {
-		jobs = append(jobs, openJob{ch: *want.cursor, fatal: false, result: &cursorConn, errOut: &cursorErr})
+		jobs = append(jobs, openJob{ch: *want.cursor, fatal: false, result: &cursorConn, errOut: &cursorErr, usbSlot: -1})
 	}
 	if want.playback != nil {
-		jobs = append(jobs, openJob{ch: *want.playback, fatal: false, result: &playbackConn, errOut: &playbackErr})
+		jobs = append(jobs, openJob{ch: *want.playback, fatal: false, result: &playbackConn, errOut: &playbackErr, usbSlot: -1})
+	}
+	if want.record != nil {
+		jobs = append(jobs, openJob{ch: *want.record, fatal: false, result: &recordConn, errOut: &recordErr, usbSlot: -1})
+	}
+	if want.webdav != nil {
+		jobs = append(jobs, openJob{ch: *want.webdav, fatal: false, result: &webdavConn, errOut: &webdavErr, usbSlot: -1})
+	}
+	for i := range want.usbredir {
+		jobs = append(jobs, openJob{ch: want.usbredir[i], fatal: false, errOut: &usbErrs[i], usbSlot: i})
 	}
 
 	var (
@@ -219,7 +240,7 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 						fatalErr = err
 					}
 					mu.Unlock()
-					// Cancel sibling opens (including best-effort cursor) on fatal failure.
+					// Cancel sibling opens (including best-effort) on fatal failure.
 					cancel()
 				} else if job.errOut != nil {
 					*job.errOut = err
@@ -244,16 +265,34 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 				}
 				return
 			}
-			*job.result = conn
+			if job.usbSlot >= 0 {
+				usbResults[job.usbSlot] = USBChannel{ID: job.ch.ID, Conn: conn}
+				return
+			}
+			if job.result != nil {
+				*job.result = conn
+			}
 		}()
 	}
 	wg.Wait()
 
+	// Collect successful USB conns (skip slots that failed).
+	var usbConns []USBChannel
+	for i, u := range usbResults {
+		if u.Conn != nil {
+			usbConns = append(usbConns, u)
+		} else if usbErrs[i] != nil {
+			log.Printf("session: usbredir channel id=%d open failed (degraded): %v",
+				want.usbredir[i].ID, usbErrs[i])
+		}
+	}
+
 	if fatalErr != nil {
 		// Tear down any children that succeeded before the fatal failure.
-		for _, c := range []net.Conn{displayConn, inputsConn, cursorConn, playbackConn} {
-			if c != nil {
-				_ = c.Close()
+		closeConns(displayConn, inputsConn, cursorConn, playbackConn, recordConn, webdavConn)
+		for _, u := range usbConns {
+			if u.Conn != nil {
+				_ = u.Conn.Close()
 			}
 		}
 		return fatalErr
@@ -265,19 +304,26 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 	if playbackErr != nil {
 		log.Printf("session: playback channel open failed (degraded): %v", playbackErr)
 	}
+	if recordErr != nil {
+		log.Printf("session: record channel open failed (degraded): %v", recordErr)
+	}
+	if webdavErr != nil {
+		log.Printf("session: webdav channel open failed (degraded): %v", webdavErr)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		for _, c := range []net.Conn{displayConn, inputsConn, cursorConn, playbackConn} {
-			if c != nil {
-				_ = c.Close()
+		closeConns(displayConn, inputsConn, cursorConn, playbackConn, recordConn, webdavConn)
+		for _, u := range usbConns {
+			if u.Conn != nil {
+				_ = u.Conn.Close()
 			}
 		}
 		// defer marks openFailed
 		return ux.New(ux.ClassInternal, ux.MsgInternal, fmt.Errorf("session: closed during child open"))
 	}
-	// Publish only on full success.
+	// Publish only on full success (required channels open; best-effort may be nil).
 	s.connectionID = connID
 	initCopy := init
 	s.mainInit = &initCopy
@@ -288,21 +334,40 @@ func (s *Session) OpenChannels(ctx context.Context) error {
 	s.cursorErr = cursorErr
 	s.playbackConn = playbackConn
 	s.playbackErr = playbackErr
+	s.recordConn = recordConn
+	s.recordErr = recordErr
+	s.usbConns = usbConns
+	s.usbErrs = append([]error(nil), usbErrs...)
+	s.webdavConn = webdavConn
+	s.webdavErr = webdavErr
 	s.openState = openReady
 	success = true
 	return nil
 }
 
-// phase1Want holds the first listed instance of each openable channel type.
+// closeConns closes non-nil connections, ignoring errors.
+func closeConns(conns ...net.Conn) {
+	for _, c := range conns {
+		if c != nil {
+			_ = c.Close()
+		}
+	}
+}
+
+// phase1Want holds openable channel instances selected from CHANNELS_LIST.
+// USB redir keeps every listed channel id (multi-redir).
 type phase1Want struct {
 	display  *protocol.ChannelID
 	inputs   *protocol.ChannelID
 	cursor   *protocol.ChannelID
 	playback *protocol.ChannelID
+	record   *protocol.ChannelID
+	webdav   *protocol.ChannelID
+	usbredir []protocol.ChannelID
 }
 
-// selectPhase1Channels picks DISPLAY, INPUTS, and optional CURSOR/PLAYBACK.
-// Unsupported types (record, usbredir, port, webdav, …) are ignored.
+// selectPhase1Channels picks required DISPLAY/INPUTS and optional best-effort
+// channels (cursor, playback, record, usbredir×N, webdav). Port is ignored.
 func selectPhase1Channels(list []protocol.ChannelID) phase1Want {
 	var w phase1Want
 	for i := range list {
@@ -331,6 +396,18 @@ func selectPhase1Channels(list []protocol.ChannelID) phase1Want {
 				c := ch
 				w.playback = &c
 			}
+		case protocol.ChannelRecord:
+			if w.record == nil {
+				c := ch
+				w.record = &c
+			}
+		case protocol.ChannelWebDAV:
+			if w.webdav == nil {
+				c := ch
+				w.webdav = &c
+			}
+		case protocol.ChannelUSBRedir:
+			w.usbredir = append(w.usbredir, ch)
 		}
 	}
 	return w
@@ -359,6 +436,8 @@ func (s *Session) dialAndLinkChild(ctx context.Context, connectionID uint32, ch 
 	// Inputs: KEY_SCANCODE (spice-gtk always sets SPICE_INPUTS_CAP_KEY_SCANCODE).
 	// Playback: VOLUME only (no OPUS/CELT) so the server prefers RAW PCM, which
 	// Phase 2 decodes without cgo/native audio codecs.
+	// Record: VOLUME only (no OPUS/CELT); client answers MODE=RAW on START.
+	// USB/WebDAV: no VMC LZ4 cap (scaffold accepts raw DATA only).
 	// Display: MULTI_CODEC + MJPEG always; CODEC_H264 only when h264.Available()
 	// (OS decoder on macOS/Windows; user FFmpeg on Linux — never advertise when false).
 	var channelCaps []uint32
@@ -369,6 +448,8 @@ func (s *Session) dialAndLinkChild(ctx context.Context, connectionID uint32, ch 
 		channelCaps = protocol.CapsFromBits(protocol.InputsCapKeyScancode)
 	case protocol.ChannelPlayback:
 		channelCaps = protocol.CapsFromBits(protocol.PlaybackCapVolume)
+	case protocol.ChannelRecord:
+		channelCaps = protocol.CapsFromBits(protocol.RecordCapVolume)
 	}
 
 	err = linkChannel(ctx, conn, pw, linkParams{

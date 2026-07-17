@@ -1373,3 +1373,242 @@ func TestOpenChannels_ConcurrentRejected(t *testing.T) {
 		t.Fatal("first OpenChannels did not return after Close")
 	}
 }
+
+func channelListWithPhase3BestEffort() []protocol.ChannelID {
+	return []protocol.ChannelID{
+		{Type: protocol.ChannelDisplay, ID: 0},
+		{Type: protocol.ChannelInputs, ID: 0},
+		{Type: protocol.ChannelRecord, ID: 0},
+		{Type: protocol.ChannelUSBRedir, ID: 0},
+		{Type: protocol.ChannelUSBRedir, ID: 1},
+		{Type: protocol.ChannelWebDAV, ID: 0},
+	}
+}
+
+// TestOpenChannels_Phase3BestEffort_OpenNotFatal opens record + multi-usb + webdav
+// successfully as best-effort; session remains ready.
+func TestOpenChannels_Phase3BestEffort_OpenNotFatal(t *testing.T) {
+	pubDER, priv := loadTicketKey(t)
+	password := []byte("p")
+	const sessionID uint32 = 77
+
+	// main + display + inputs + record + usb0 + usb1 + webdav = 7
+	n := 7
+	clients := make([]net.Conn, n)
+	servers := make([]net.Conn, n)
+	for i := 0; i < n; i++ {
+		c, s := net.Pipe()
+		clients[i], servers[i] = c, s
+	}
+	defer func() {
+		for i := 0; i < n; i++ {
+			_ = clients[i].Close()
+			_ = servers[i].Close()
+		}
+	}()
+
+	errCh := make(chan error, n+1)
+	go func() {
+		if err := runMockLinkServerKeepOpen(t, servers[0], mockLinkOpts{
+			pubDER: pubDER, priv: priv, expectedPass: password, checkPassword: true,
+		}); err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- serveMainPostLink(t, servers[0], sessionID, channelListWithPhase3BestEffort())
+	}()
+	for i := 1; i < n; i++ {
+		i := i
+		go func() {
+			errCh <- runChildLinkServer(t, servers[i], childLinkOpts{
+				pubDER: pubDER, priv: priv, password: password,
+			})
+		}()
+	}
+
+	sess, err := session.New(session.Config{
+		Endpoint: connector.Endpoint{Host: "h", Port: 1, AllowCleartext: true},
+		Password: password,
+		Dialer:   &multiPipeDialer{conns: clients},
+		ShareDir: "/tmp/share-scaffold",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	ctx := context.Background()
+	if err := sess.DialMain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.OpenChannels(ctx); err != nil {
+		t.Fatalf("OpenChannels must not fail when phase3 best-effort channels open: %v", err)
+	}
+	if !sess.ChannelsReady() {
+		t.Fatal("ready")
+	}
+	if sess.DisplayConn() == nil || sess.InputsConn() == nil {
+		t.Fatal("required channels")
+	}
+	if sess.RecordConn() == nil {
+		t.Fatal("record should open")
+	}
+	if sess.RecordError() != nil {
+		t.Fatalf("record err: %v", sess.RecordError())
+	}
+	usb := sess.USBConns()
+	if len(usb) != 2 {
+		t.Fatalf("usb conns=%d want 2", len(usb))
+	}
+	ids := map[uint8]bool{}
+	for _, u := range usb {
+		ids[u.ID] = true
+		if u.Conn == nil {
+			t.Fatal("nil usb conn")
+		}
+	}
+	if !ids[0] || !ids[1] {
+		t.Fatalf("usb ids %v", ids)
+	}
+	if sess.WebDAVConn() == nil {
+		t.Fatal("webdav should open")
+	}
+	if sess.ShareDir() != "/tmp/share-scaffold" {
+		t.Fatalf("shareDir=%q", sess.ShareDir())
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("server: %v", err)
+		}
+	}
+}
+
+// TestOpenChannels_Phase3RecordFail_NotFatal: record link denied; session still ready.
+func TestOpenChannels_Phase3RecordFail_NotFatal(t *testing.T) {
+	pubDER, priv := loadTicketKey(t)
+	password := []byte("p")
+	const sessionID uint32 = 88
+
+	// main + display + inputs + record
+	n := 4
+	clients := make([]net.Conn, n)
+	servers := make([]net.Conn, n)
+	for i := 0; i < n; i++ {
+		c, s := net.Pipe()
+		clients[i], servers[i] = c, s
+	}
+	defer func() {
+		for i := 0; i < n; i++ {
+			_ = clients[i].Close()
+			_ = servers[i].Close()
+		}
+	}()
+
+	errCh := make(chan error, n+1)
+	list := []protocol.ChannelID{
+		{Type: protocol.ChannelDisplay, ID: 0},
+		{Type: protocol.ChannelInputs, ID: 0},
+		{Type: protocol.ChannelRecord, ID: 0},
+	}
+	go func() {
+		if err := runMockLinkServerKeepOpen(t, servers[0], mockLinkOpts{
+			pubDER: pubDER, priv: priv, expectedPass: password, checkPassword: true,
+		}); err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- serveMainPostLink(t, servers[0], sessionID, list)
+	}()
+	// Children: deny RECORD by type (dial order is nondeterministic).
+	for i := 1; i < n; i++ {
+		i := i
+		go func() {
+			errCh <- runChildLinkServerMaybeFailRecord(t, servers[i], pubDER, priv, password)
+		}()
+	}
+
+	sess, err := session.New(session.Config{
+		Endpoint: connector.Endpoint{Host: "h", Port: 1, AllowCleartext: true},
+		Password: password,
+		Dialer:   &multiPipeDialer{conns: clients},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sess.DialMain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.OpenChannels(ctx); err != nil {
+		t.Fatalf("record open failure must not be session-fatal: %v", err)
+	}
+	if !sess.ChannelsReady() {
+		t.Fatal("ready")
+	}
+	if sess.DisplayConn() == nil || sess.InputsConn() == nil {
+		t.Fatal("required channels")
+	}
+	if sess.RecordConn() != nil {
+		t.Fatal("record conn should be nil after open failure")
+	}
+	if sess.RecordError() == nil {
+		t.Fatal("expected record open error recorded")
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errCh; err != nil {
+			t.Logf("server %d: %v", i, err)
+		}
+	}
+}
+
+// runChildLinkServerMaybeFailRecord completes link OK for non-record; for record writes PermissionDenied.
+func runChildLinkServerMaybeFailRecord(t *testing.T, conn net.Conn, pubDER []byte, priv *rsa.PrivateKey, password []byte) error {
+	t.Helper()
+	hdr, err := protocol.ReadLinkHeader(conn)
+	if err != nil {
+		return err
+	}
+	body := make([]byte, hdr.Size)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return err
+	}
+	mess, err := protocol.DecodeLinkMess(body)
+	if err != nil {
+		return err
+	}
+	reply := &protocol.LinkReply{Error: protocol.LinkErrOK, PubKey: pubDER, CommonCaps: protocol.Phase1CommonCaps()}
+	pkt, err := reply.EncodePacket()
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(pkt); err != nil {
+		return err
+	}
+	authBuf := make([]byte, 4+protocol.SpiceTicketCiphertextLen)
+	if _, err := io.ReadFull(conn, authBuf); err != nil {
+		return err
+	}
+	if mess.ChannelType == protocol.ChannelRecord {
+		return protocol.WriteLinkResult(conn, protocol.LinkErrPermissionDenied)
+	}
+	auth, err := protocol.DecodeAuthSpice(authBuf)
+	if err != nil {
+		return err
+	}
+	plain, err := rsa.DecryptOAEP(sha1.New(), nil, priv, auth.Ciphertext, nil)
+	if err != nil {
+		_ = protocol.WriteLinkResult(conn, protocol.LinkErrPermissionDenied)
+		return err
+	}
+	if len(plain) > 0 && plain[len(plain)-1] == 0 {
+		plain = plain[:len(plain)-1]
+	}
+	if !bytes.Equal(plain, password) {
+		_ = protocol.WriteLinkResult(conn, protocol.LinkErrPermissionDenied)
+		return fmt.Errorf("bad password")
+	}
+	return protocol.WriteLinkResult(conn, protocol.LinkErrOK)
+}

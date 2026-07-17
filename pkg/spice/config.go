@@ -27,11 +27,13 @@ type HotkeyConfig struct {
 }
 
 // Drivers is the optional set of frame/cursor/audio sinks supplied by the UI.
-// Nil fields use headless defaults (NullDriver / no cursor shape / NullPlayback).
+// Nil fields use headless defaults (NullDriver / no cursor shape / NullPlayback /
+// NullRecord).
 type Drivers struct {
 	Display  DisplayDriver
 	Cursor   CursorDriver
 	Playback PlaybackDriver
+	Record   RecordDriver
 }
 
 // ConnectConfig is the library entry configuration for a SPICE session.
@@ -69,6 +71,10 @@ type ConnectConfig struct {
 	AllowReconnect bool
 	// AllowCleartext permits a non-TLS dial when TLSPort is 0 (lab only).
 	AllowCleartext bool
+	// ShareDir is an optional host directory for the WebDAV share scaffold.
+	// Empty means webdav (when listed) accepts/discards frames only.
+	// CLI: remote-viewer --share-dir=PATH
+	ShareDir string
 
 	// dialer overrides the default connector dialer (tests; unexported).
 	dialer connector.Dialer

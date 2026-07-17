@@ -25,8 +25,8 @@ import (
 // eventBuf is the capacity of Client.Events.
 const eventBuf = 16
 
-// Client is a live SPICE session (main + display + inputs; cursor and
-// playback best-effort).
+// Client is a live SPICE session (main + display + inputs; cursor, playback,
+// record, usbredir, and webdav best-effort).
 //
 // Create with Connect. There is no auto-reconnect for ticket sessions: on
 // disconnect, open a new connection file and call Connect again.
@@ -53,6 +53,9 @@ type Client struct {
 	inputs   *channel.Inputs
 	cursor   *channel.Cursor
 	playback *channel.Playback
+	record   *channel.Record
+	usb      []*channel.USBRedir
+	webdav   *channel.WebDAV
 	pubIn    *Inputs
 	agent    *agent.Session
 
@@ -110,6 +113,7 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 		Password:       pw,
 		AllowCleartext: cfg.AllowCleartext || ep.AllowCleartext,
 		Dialer:         cfg.dialer,
+		ShareDir:       cfg.ShareDir,
 	})
 	// Session owns the secret from here on success; always drop the local copy.
 	security.Wipe(pw)
@@ -157,8 +161,9 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*Client, error) {
 	return c, nil
 }
 
-// startChannels constructs display/inputs/cursor/playback handlers and starts
-// Run loops. Returns non-nil best-effort open errors (cursor/playback degrade).
+// startChannels constructs display/inputs/cursor/playback/record/usb/webdav
+// handlers and starts Run loops. Returns non-nil best-effort open errors
+// (cursor/playback/record/usb/webdav degrade).
 func (c *Client) startChannels(drivers Drivers) (bestEffortErrs []error, err error) {
 	dispConn := c.sess.DisplayConn()
 	inpConn := c.sess.InputsConn()
@@ -211,6 +216,42 @@ func (c *Client) startChannels(drivers Drivers) (bestEffortErrs []error, err err
 		bestEffortErrs = append(bestEffortErrs, e)
 	}
 
+	// Record (best-effort; conn may be nil). Nil driver → NullRecord.
+	recConn := c.sess.RecordConn()
+	if recConn != nil {
+		rdrv := asRecordDriver(drivers.Record)
+		if rdrv == nil {
+			rdrv = channel.NewNullRecord()
+		}
+		c.record = channel.NewRecord(recConn, rdrv)
+	} else if e := c.sess.RecordError(); e != nil {
+		bestEffortErrs = append(bestEffortErrs, e)
+	}
+
+	// USB redir (best-effort; zero or more channel ids).
+	for _, u := range c.sess.USBConns() {
+		if u.Conn == nil {
+			continue
+		}
+		ur := channel.NewUSBRedir(u.Conn, channel.USBRedirOpts{ChannelID: u.ID})
+		c.usb = append(c.usb, ur)
+	}
+	for _, e := range c.sess.USBErrors() {
+		if e != nil {
+			bestEffortErrs = append(bestEffortErrs, e)
+		}
+	}
+
+	// WebDAV (best-effort; conn may be nil).
+	wdConn := c.sess.WebDAVConn()
+	if wdConn != nil {
+		c.webdav = channel.NewWebDAV(wdConn, channel.WebDAVOpts{
+			ShareRoot: c.sess.ShareDir(),
+		})
+	} else if e := c.sess.WebDAVError(); e != nil {
+		bestEffortErrs = append(bestEffortErrs, e)
+	}
+
 	// Run loops.
 	c.wg.Add(1)
 	go c.runFatal("display", func() error {
@@ -233,6 +274,29 @@ func (c *Client) startChannels(drivers Drivers) (bestEffortErrs []error, err err
 		c.wg.Add(1)
 		go c.runBestEffort("playback", func() error {
 			return c.playback.Run(c.lifeCtx)
+		})
+	}
+
+	if c.record != nil {
+		c.wg.Add(1)
+		go c.runBestEffort("record", func() error {
+			return c.record.Run(c.lifeCtx)
+		})
+	}
+
+	for i := range c.usb {
+		ur := c.usb[i]
+		name := fmt.Sprintf("usbredir[%d]", ur.ChannelID())
+		c.wg.Add(1)
+		go c.runBestEffort(name, func() error {
+			return ur.Run(c.lifeCtx)
+		})
+	}
+
+	if c.webdav != nil {
+		c.wg.Add(1)
+		go c.runBestEffort("webdav", func() error {
+			return c.webdav.Run(c.lifeCtx)
 		})
 	}
 

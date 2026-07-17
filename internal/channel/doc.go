@@ -1,5 +1,5 @@
 // Package channel implements SPICE channel types (main, display, inputs,
-// cursor, playback, and later record/usbredir/port/webdav).
+// cursor, playback, record, usbredir, webdav).
 //
 // Phase 1:
 //   - Open-policy helpers used by session.Channel manager (PR 07)
@@ -12,8 +12,14 @@
 //   - Best-effort playback channel: MODE/START/STOP/DATA (RAW S16LE PCM),
 //     VOLUME/MUTE; open/runtime failures are non-fatal (PR 19)
 //
-// Cursor and playback open and runtime decode failures are non-fatal: session
-// continues (server-drawn cursor in the framebuffer; silent audio if degraded).
+// Phase 3 (scaffolds; never session-fatal):
+//   - Record: START → MODE=RAW + START_MARK; NullRecord sends no PCM
+//   - USB redir: SpiceVMC DATA loop; optional USBFilter; no libusb in default binary
+//   - WebDAV: Port+VMC message loop; optional share root hook; full share UX later
+//   - Shared VMC helpers in vmc.go
+//
+// Cursor, playback, record, usbredir, and webdav open/runtime failures are
+// non-fatal: session continues (server-drawn cursor; silent audio/mic; no USB/share).
 //
 // QEMU typing smoke / live SPICE inputs integration is intentionally deferred
 // (//go:build integration or session/UI smoke in a later PR). Unit tests cover

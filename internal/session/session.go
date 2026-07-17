@@ -35,18 +35,28 @@ type Config struct {
 	AllowCleartext bool
 	// Dialer establishes transport connections. nil uses connector.NewDialer().
 	Dialer connector.Dialer
+	// ShareDir is an optional host directory for the WebDAV share scaffold.
+	// Empty means the webdav channel (if opened) accepts/discards frames only.
+	ShareDir string
+}
+
+// USBChannel is one linked usbredir channel (multi-id support).
+type USBChannel struct {
+	ID   uint8
+	Conn net.Conn
 }
 
 // Session owns SPICE session lifecycle: main link, MAIN_INIT session_id,
 // CHANNELS_LIST, and parallel child channel links (display, inputs, cursor,
-// playback).
+// playback, record, usbredir, webdav).
 //
 // No auto-reconnect for short-lived Proxmox tickets.
-// Record/usbredir/port/webdav are not opened in this phase.
+// Record/usbredir/webdav open as best-effort Phase 3 scaffolds (never session-fatal).
 type Session struct {
 	endpoint connector.Endpoint
 	password []byte // private copy; wiped on Close
 	dialer   connector.Dialer
+	shareDir string
 
 	// Session-scoped cancel: Close cancels to stop new opens.
 	lifeCtx    context.Context
@@ -69,6 +79,12 @@ type Session struct {
 	cursorErr    error // non-nil if best-effort cursor open failed
 	playbackConn net.Conn
 	playbackErr  error // non-nil if best-effort playback open failed
+	recordConn   net.Conn
+	recordErr    error // non-nil if best-effort record open failed
+	usbConns     []USBChannel
+	usbErrs      []error // per-listed-id open errors (may be shorter or sparse)
+	webdavConn   net.Conn
+	webdavErr    error // non-nil if best-effort webdav open failed
 
 	// openState serializes OpenChannels and distinguishes idle/ready/failed.
 	openState openState
@@ -99,6 +115,7 @@ func New(cfg Config) (*Session, error) {
 		endpoint:   ep,
 		password:   pw,
 		dialer:     d,
+		shareDir:   cfg.ShareDir,
 		lifeCtx:    lifeCtx,
 		lifeCancel: lifeCancel,
 		openSem:    make(chan struct{}, maxParallelChildOpens),
@@ -213,7 +230,7 @@ func (s *Session) ConnectionID() uint32 {
 }
 
 // ChannelsReady reports whether OpenChannels completed successfully
-// (display+inputs linked; cursor/playback may be degraded).
+// (display+inputs linked; cursor/playback/record/usb/webdav may be degraded).
 func (s *Session) ChannelsReady() bool {
 	if s == nil {
 		return false
@@ -283,6 +300,84 @@ func (s *Session) PlaybackError() error {
 	return s.playbackErr
 }
 
+// ShareDir returns the optional WebDAV share root from Config (may be empty).
+func (s *Session) ShareDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.shareDir
+}
+
+// RecordConn returns the linked record channel connection, or nil.
+func (s *Session) RecordConn() net.Conn {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recordConn
+}
+
+// RecordError returns the best-effort record open error, if any.
+func (s *Session) RecordError() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recordErr
+}
+
+// USBConns returns a copy of successfully linked usbredir channels (may be empty).
+func (s *Session) USBConns() []USBChannel {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.usbConns) == 0 {
+		return nil
+	}
+	out := make([]USBChannel, len(s.usbConns))
+	copy(out, s.usbConns)
+	return out
+}
+
+// USBErrors returns a copy of per-slot usbredir open errors (may include nils).
+func (s *Session) USBErrors() []error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.usbErrs) == 0 {
+		return nil
+	}
+	out := make([]error, len(s.usbErrs))
+	copy(out, s.usbErrs)
+	return out
+}
+
+// WebDAVConn returns the linked webdav channel connection, or nil.
+func (s *Session) WebDAVConn() net.Conn {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.webdavConn
+}
+
+// WebDAVError returns the best-effort webdav open error, if any.
+func (s *Session) WebDAVError() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.webdavErr
+}
+
 // MainInit returns a copy of MAIN_INIT after a successful OpenChannels.
 // ok is false if open has not succeeded.
 func (s *Session) MainInit() (protocol.MainInit, bool) {
@@ -302,7 +397,7 @@ func (s *Session) MainInit() (protocol.MainInit, bool) {
 //  1. cancel session context (stop new opens)
 //  2. wait for in-flight OpenChannels (timeout) so mid-link work exits before
 //     we close sockets it may still be using
-//  3. close inputs → display → cursor → playback → main
+//  3. close inputs → display → cursor → playback → record → usbredir* → webdav → main
 //  4. wipe password
 //
 // Waiting before channel close (vs after) is intentional: cancel unblocks open
@@ -328,11 +423,18 @@ func (s *Session) Close() error {
 	display := s.displayConn
 	cursor := s.cursorConn
 	playback := s.playbackConn
+	record := s.recordConn
+	usb := append([]USBChannel(nil), s.usbConns...)
+	webdav := s.webdavConn
 	main := s.mainConn
 	s.inputsConn = nil
 	s.displayConn = nil
 	s.cursorConn = nil
 	s.playbackConn = nil
+	s.recordConn = nil
+	s.usbConns = nil
+	s.usbErrs = nil
+	s.webdavConn = nil
 	s.mainConn = nil
 	s.connectionID = 0
 	s.mu.Unlock()
@@ -354,16 +456,26 @@ func (s *Session) Close() error {
 		log.Printf("session: close: timed out waiting for channel opens")
 	}
 
-	// 3. close order: inputs → display → cursor → playback → main
+	// 3. close order: inputs → display → cursor → playback → record → usb* → webdav → main
 	var firstErr error
-	for _, c := range []net.Conn{inputs, display, cursor, playback, main} {
+	closeOne := func(c net.Conn) {
 		if c == nil {
-			continue
+			return
 		}
 		if err := c.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
+	closeOne(inputs)
+	closeOne(display)
+	closeOne(cursor)
+	closeOne(playback)
+	closeOne(record)
+	for _, u := range usb {
+		closeOne(u.Conn)
+	}
+	closeOne(webdav)
+	closeOne(main)
 
 	// 4. wipe password
 	s.mu.Lock()

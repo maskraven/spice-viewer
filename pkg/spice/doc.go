@@ -26,11 +26,17 @@
 //   - codecs: raw, LZ, Quic, JPEG, MJPEG streams (display channel)
 //   - playback: Drivers.Playback (RAW S16LE); Nil → NullPlayback
 //
+// Phase 3 scaffolds (best-effort; never session-fatal):
+//
+//   - record: Drivers.Record; Nil → NullRecord (MODE+START_MARK, no PCM)
+//   - usbredir: VMC DATA loop; no libusb in default binary
+//   - webdav: Port+VMC loop; optional ConnectConfig.ShareDir
+//
 // The context passed to Connect only bounds dial/open; session lifetime after
 // Connect returns is ended with Client.Close.
 //
 // DisplayDriver and NullDriver support headless frame verification and UI
-// backends. CursorDriver and PlaybackDriver are best-effort. Hotkeys/Fullscreen
+// backends. CursorDriver, PlaybackDriver, and RecordDriver are best-effort. Hotkeys/Fullscreen
 // stay on ConnectConfig (Client keeps Title only).
 //
 // Playback: set Drivers.Playback to a host audio sink implementing

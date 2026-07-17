@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Added
 
+- **Record / USB redir / WebDAV channel scaffolds** (best-effort; never session-fatal):
+  - Record: `NullRecord` default; `MODE=RAW` + `START_MARK` on START; no PCM from null driver
+  - USB redir: multi-id open; SpiceVMC DATA discard loop; optional filter hook; no libusb
+  - WebDAV: Port+VMC loop; optional `--share-dir` / `ConnectConfig.ShareDir`; partial share UX
+  - Protocol constants + `internal/protocol/{record,vmc}.go`; shared `internal/channel/vmc.go`
+  - See [docs/phase3.md](docs/phase3.md#record--usb--webdav)
+
 - **Host audio sink** (`internal/audio`):
   - GUI `OpenDefault()` → host playback on **macOS/Windows** via ebitengine/oto (purego; RAW S16LE)
   - **Linux** stub (`Available()==false`) until ALSA/Pulse lands
@@ -28,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Planned (Phase 3+)
 
 - Complete Windows Media Foundation pixel path
-- USB redirection, WebDAV, record channel
+- Real mic capture (`RecordDriver` host backend) and USB host stack (libusb/platform)
+- Full WebDAV/phodav share UX beyond message-loop scaffold
 - Linux host audio (ALSA/Pulse) beyond the current stub
 - Live Proxmox operator sign-off updates in `docs/acceptance-v0.1.md`
 
