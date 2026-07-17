@@ -42,8 +42,11 @@ type sessionUI struct {
 
 	mu     sync.Mutex
 	mods   uint8 // currently pressed modifiers (host)
-	fs     bool
-	closed bool
+	// pressed tracks scancodes currently down in the guest (spice-gtk key_state).
+	// On ungrab/focus-loss we KEY_UP all of them to avoid stuck keys.
+	pressed map[uint16]struct{}
+	fs      bool
+	closed  bool
 }
 
 func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, startFullscreen bool) *sessionUI {
@@ -60,6 +63,7 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 		surface: surface,
 		bind:    bind,
 		fs:      startFullscreen,
+		pressed: make(map[uint16]struct{}),
 	}
 
 	pad := newMousePad(ui, view)
@@ -335,7 +339,17 @@ func (ui *sessionUI) onKeyDown(ev *fyne.KeyEvent) {
 		// extra click (still click-to-grab for mouse-only paths).
 		ui.enterGrab()
 	}
-	if sc := fyneKeyScancode(name); sc != 0 && ui.inputs != nil {
+	// spice-gtk: every physical key becomes KEY_DOWN with XT scancode.
+	sc := resolveKeyScancode(ev)
+	if sc == 0 {
+		// Still unmapped — log once-level noise only for unknown non-empty names.
+		if name != "" && name != fyne.KeyUnknown {
+			log.Printf("ui: unmapped key down name=%q physical=%d", name, ev.Physical.ScanCode)
+		}
+		return
+	}
+	ui.noteKeyDown(sc)
+	if ui.inputs != nil {
 		if err := ui.inputs.KeyDown(sc); err != nil {
 			log.Printf("ui: key down: %v", err)
 		}
@@ -355,17 +369,69 @@ func (ui *sessionUI) onKeyUp(ev *fyne.KeyEvent) {
 	}
 	ui.mu.Unlock()
 
-	if !ui.grab.Active() {
+	sc := resolveKeyScancode(ev)
+	if sc == 0 {
 		return
 	}
-	if sc := fyneKeyScancode(name); sc != 0 && ui.inputs != nil {
+	// Always send KEY_UP if we believe the key is down (or even if not grabbed),
+	// so host release after ungrab cannot leave a stuck guest key.
+	ui.noteKeyUp(sc)
+	if ui.inputs != nil {
 		if err := ui.inputs.KeyUp(sc); err != nil {
 			log.Printf("ui: key up: %v", err)
 		}
 	}
 }
 
+func (ui *sessionUI) noteKeyDown(sc uint16) {
+	if ui == nil || sc == 0 {
+		return
+	}
+	ui.mu.Lock()
+	if ui.pressed == nil {
+		ui.pressed = make(map[uint16]struct{})
+	}
+	ui.pressed[sc] = struct{}{}
+	ui.mu.Unlock()
+}
+
+func (ui *sessionUI) noteKeyUp(sc uint16) {
+	if ui == nil || sc == 0 {
+		return
+	}
+	ui.mu.Lock()
+	delete(ui.pressed, sc)
+	ui.mu.Unlock()
+}
+
+// releaseAllKeys sends KEY_UP for every scancode still marked down (spice-gtk
+// release_keys on ungrab / focus loss). Prevents stuck Ctrl/Alt in the guest.
+func (ui *sessionUI) releaseAllKeys() {
+	if ui == nil {
+		return
+	}
+	ui.mu.Lock()
+	keys := make([]uint16, 0, len(ui.pressed))
+	for sc := range ui.pressed {
+		keys = append(keys, sc)
+	}
+	ui.pressed = make(map[uint16]struct{})
+	ui.mods = 0
+	ui.mu.Unlock()
+
+	if ui.inputs == nil {
+		return
+	}
+	for _, sc := range keys {
+		if err := ui.inputs.KeyUp(sc); err != nil {
+			log.Printf("ui: release key %#x: %v", sc, err)
+		}
+	}
+}
+
 func (ui *sessionUI) releaseGrab() {
+	// Match spice-gtk: release all held keys before leaving grab.
+	ui.releaseAllKeys()
 	ui.grab.Release()
 	if ui.pad != nil {
 		ui.pad.resetMotion()

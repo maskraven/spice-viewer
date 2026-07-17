@@ -13,6 +13,8 @@
 //     Ctrl+Alt+M toggles
 //   - Status bar: one caption line — title · grab · mouse mode · agent
 //   - Clipboard: chrome Copy/Paste via vdagent; TypeText fallback when agent offline
+//   - Keyboard: KeyDown/Up → PC XT scancodes (spice-gtk style); all Fyne-named
+//     keys mapped; platform Physical.ScanCode fallback; release-all on ungrab
 //   - secure-attention chord → guest Ctrl+Alt+Del (not the local chord keys)
 //   - release-cursor → ungrab; toggle-fullscreen → window fullscreen
 //

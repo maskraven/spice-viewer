@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/driver/desktop"
 
 	"github.com/maskraven/virt-viewer/pkg/spice"
 )
@@ -16,21 +17,24 @@ func TestKeyNameScancode_PeriodAndPunct(t *testing.T) {
 	if sc := keyNameScancode("."); sc != scanDot {
 		t.Fatalf("keyNameScancode(.) = %#x; want scanDot %#x", sc, scanDot)
 	}
-	if sc := fyneKeyScancode(fynePeriodKey()); sc != scanDot {
+	if sc := fyneKeyScancode(fyne.KeyPeriod); sc != scanDot {
 		t.Fatalf("fyneKeyScancode(KeyPeriod) = %#x; want %#x", sc, scanDot)
 	}
+	if sc := resolveKeyScancode(&fyne.KeyEvent{Name: fyne.KeyPeriod}); sc != scanDot {
+		t.Fatalf("resolveKeyScancode(KeyPeriod) = %#x; want %#x", sc, scanDot)
+	}
 	for r, want := range map[rune]uint16{
-		',': scanComma,
-		'/': scanSlash,
-		'-': scanMinus,
-		'=': scanEqual,
-		';': scanSemicolon,
+		',':  scanComma,
+		'/':  scanSlash,
+		'-':  scanMinus,
+		'=':  scanEqual,
+		';':  scanSemicolon,
 		'\'': scanQuote,
-		'`': scanGrave,
+		'`':  scanGrave,
 		'\\': scanBackslash,
-		'[': scanLBracket,
-		']': scanRBracket,
-		'>': scanDot, // shifted form of period key
+		'[':  scanLBracket,
+		']':  scanRBracket,
+		'>':  scanDot, // shifted form of period key
 	} {
 		if sc := punctScancode(r); sc != want {
 			t.Errorf("punctScancode(%q) = %#x; want %#x", r, sc, want)
@@ -38,9 +42,33 @@ func TestKeyNameScancode_PeriodAndPunct(t *testing.T) {
 	}
 }
 
-// fynePeriodKey avoids importing fyne in every assertion site name.
-func fynePeriodKey() fyne.KeyName {
-	return fyne.KeyPeriod
+func TestFyneKeyScancode_CoreKeys(t *testing.T) {
+	cases := map[fyne.KeyName]uint16{
+		fyne.KeyReturn:          scanEnter,
+		fyne.KeyEnter:           scanKPEnter,
+		fyne.KeyPeriod:          scanDot,
+		desktop.KeyCapsLock:     scanCaps,
+		desktop.KeyMenu:         scanMenu,
+		desktop.KeyPrintScreen:  scanPrint,
+		desktop.KeyControlLeft:  scanLCtrl,
+		desktop.KeyControlRight: scanRCtrl,
+		fyne.KeyA:               letterScancode('a'),
+		fyne.Key0:               digitScancode('0'),
+		fyne.KeyAsterisk:        scanKPStar,
+		fyne.KeyPlus:            scanKPPlus,
+	}
+	for name, want := range cases {
+		if sc := fyneKeyScancode(name); sc != want {
+			t.Errorf("fyneKeyScancode(%q) = %#x; want %#x", name, sc, want)
+		}
+	}
+	// Print Screen must be E0|0x37, not KP * (0x37).
+	if scanPrint == scanKPStar {
+		t.Fatal("scanPrint must not equal KP*")
+	}
+	if scanPrint != scanE0|0x37 {
+		t.Fatalf("scanPrint = %#x; want %#x", scanPrint, scanE0|0x37)
+	}
 }
 
 func TestParseChord_ProxmoxDefaults(t *testing.T) {

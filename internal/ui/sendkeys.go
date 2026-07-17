@@ -140,22 +140,7 @@ func asciiChord(r rune) ([]uint16, error) {
 	return nil, fmt.Errorf("ui: type text: unsupported character %q (US QWERTY only; use agent clipboard in a later release)", r)
 }
 
-// XT scancodes for punctuation (US layout).
-const (
-	scanMinus     uint16 = 0x0c // -
-	scanEqual     uint16 = 0x0d // =
-	scanLBracket  uint16 = 0x1a // [
-	scanRBracket  uint16 = 0x1b // ]
-	scanSemicolon uint16 = 0x27 // ;
-	scanQuote     uint16 = 0x28 // '
-	scanGrave     uint16 = 0x29 // `
-	scanBackslash uint16 = 0x2b // \
-	scanComma     uint16 = 0x33 // ,
-	scanDot       uint16 = 0x34 // .
-	scanSlash     uint16 = 0x35 // /
-	scanPrint     uint16 = 0x37 // Print Screen (SysRq make on XT; best-effort)
-)
-
+// unshiftedPunct: US layout base keys (constants live in scancode.go).
 var unshiftedPunct = map[rune]uint16{
 	'-':  scanMinus,
 	'=':  scanEqual,

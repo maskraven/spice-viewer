@@ -7,9 +7,11 @@ package ui
 // bit 0x100 marks an 0xe0 prefix (e.g. Delete = 0x153).
 //
 // Duplicated here so internal/ui does not import internal/channel (importlint).
+// Values match spice-gtk / QEMU PC XT expectations for KEY_DOWN/KEY_UP.
 const (
 	scanE0 uint16 = 0x100
 
+	// Modifiers
 	scanLCtrl  uint16 = 0x1d
 	scanRCtrl  uint16 = scanE0 | 0x1d
 	scanLAlt   uint16 = 0x38
@@ -18,15 +20,29 @@ const (
 	scanRShift uint16 = 0x36
 	scanLGUI   uint16 = scanE0 | 0x5b
 	scanRGUI   uint16 = scanE0 | 0x5c
+	scanMenu   uint16 = scanE0 | 0x5d // App / Context menu
 
-	scanDelete uint16 = scanE0 | 0x53
-	scanInsert uint16 = scanE0 | 0x52
+	// Control / whitespace
 	scanEscape uint16 = 0x01
 	scanTab    uint16 = 0x0f
-	scanEnter  uint16 = 0x1c
+	scanEnter  uint16 = 0x1c // main Enter
 	scanSpace  uint16 = 0x39
 	scanBack   uint16 = 0x0e
+	scanCaps   uint16 = 0x3a
 
+	// Navigation (extended)
+	scanDelete   uint16 = scanE0 | 0x53
+	scanInsert   uint16 = scanE0 | 0x52
+	scanHome     uint16 = scanE0 | 0x47
+	scanEnd      uint16 = scanE0 | 0x4f
+	scanPageUp   uint16 = scanE0 | 0x49
+	scanPageDown uint16 = scanE0 | 0x51
+	scanUp       uint16 = scanE0 | 0x48
+	scanDown     uint16 = scanE0 | 0x50
+	scanLeft     uint16 = scanE0 | 0x4b
+	scanRight    uint16 = scanE0 | 0x4d
+
+	// Function keys
 	scanF1  uint16 = 0x3b
 	scanF2  uint16 = 0x3c
 	scanF3  uint16 = 0x3d
@@ -40,14 +56,44 @@ const (
 	scanF11 uint16 = 0x57
 	scanF12 uint16 = 0x58
 
-	scanHome     uint16 = scanE0 | 0x47
-	scanEnd      uint16 = scanE0 | 0x4f
-	scanPageUp   uint16 = scanE0 | 0x49
-	scanPageDown uint16 = scanE0 | 0x51
-	scanUp       uint16 = scanE0 | 0x48
-	scanDown     uint16 = scanE0 | 0x50
-	scanLeft     uint16 = scanE0 | 0x4b
-	scanRight    uint16 = scanE0 | 0x4d
+	// US punctuation (main keyboard)
+	scanMinus     uint16 = 0x0c
+	scanEqual     uint16 = 0x0d
+	scanLBracket  uint16 = 0x1a
+	scanRBracket  uint16 = 0x1b
+	scanSemicolon uint16 = 0x27
+	scanQuote     uint16 = 0x28
+	scanGrave     uint16 = 0x29
+	scanBackslash uint16 = 0x2b
+	scanComma     uint16 = 0x33
+	scanDot       uint16 = 0x34
+	scanSlash     uint16 = 0x35
+
+	// Locks / keypad
+	scanNumLock    uint16 = 0x45
+	scanScrollLock uint16 = 0x46
+	scanKPStar     uint16 = 0x37
+	scanKPMinus    uint16 = 0x4a
+	scanKPPlus     uint16 = 0x4e
+	scanKPDot      uint16 = 0x53
+	scanKP0        uint16 = 0x52
+	scanKP1        uint16 = 0x4f
+	scanKP2        uint16 = 0x50
+	scanKP3        uint16 = 0x51
+	scanKP4        uint16 = 0x4b
+	scanKP5        uint16 = 0x4c
+	scanKP6        uint16 = 0x4d
+	scanKP7        uint16 = 0x47
+	scanKP8        uint16 = 0x48
+	scanKP9        uint16 = 0x49
+	scanKPEnter    uint16 = scanE0 | 0x1c
+	scanKPSlash    uint16 = scanE0 | 0x35
+
+	// Print Screen is E0 37 (not KP * which is plain 0x37).
+	scanPrint uint16 = scanE0 | 0x37
+
+	// ISO 102nd key (EU <>|), common on non-US boards.
+	scanISO102 uint16 = 0x56
 )
 
 // letterScancode returns the XT scancode for a–z / A–Z, or 0.

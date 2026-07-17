@@ -274,12 +274,20 @@ func keyNameScancode(key string) uint16 {
 		return scanEscape
 	case "enter":
 		return scanEnter
+	case "kpenter":
+		return scanKPEnter
 	case "tab":
 		return scanTab
 	case "space":
 		return scanSpace
 	case "backspace":
 		return scanBack
+	case "capslock":
+		return scanCaps
+	case "menu":
+		return scanMenu
+	case "print", "printscreen":
+		return scanPrint
 	case "home":
 		return scanHome
 	case "end":
