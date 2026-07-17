@@ -301,26 +301,9 @@ func (ui *sessionUI) showTypeTextDialog() {
 	bg.StrokeColor = color.NRGBA{R: 55, G: 58, B: 66, A: 255}
 	bg.StrokeWidth = 1
 	card := container.NewStack(bg, container.NewPadded(inner))
-	card.Resize(fyne.NewSize(480, 280))
 
-	// Center on canvas.
-	cs := ui.win.Canvas().Size()
-	pos := fyne.NewPos((cs.Width-480)/2, (cs.Height-280)/2)
-	if pos.X < 8 {
-		pos.X = 8
-	}
-	if pos.Y < 8 {
-		pos.Y = 8
-	}
-
-	th := darkPanelTheme{Theme: theme.Current()}
-	themed := container.NewThemeOverride(card, th)
-	// Force fixed size for the overlay panel.
-	wrap := container.NewStack(themed)
-	wrap.Resize(fyne.NewSize(480, 280))
-
-	ui.showDarkPanelOverlay(wrap, pos)
-	// Override dismiss already closes darkOverlay; closeDlg just hides overlay.
+	// Centered dark overlay (fixed size); tap outside dismisses.
+	ui.showDarkPanelOverlayCentered(card, fyne.NewSize(480, 280))
 	closeDlg = func() {
 		ui.closeDarkOverlay()
 	}

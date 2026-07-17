@@ -312,6 +312,8 @@ type darkOverlay struct {
 	panel     fyne.CanvasObject
 	panelPos  fyne.Position
 	panelSize fyne.Size
+	// center places the panel in the middle of the canvas (Type dialog).
+	center    bool
 	onDismiss func()
 	shown     bool
 }
@@ -322,6 +324,15 @@ func (d *darkOverlay) Show() {
 	}
 	d.canvas.Overlays().Add(d)
 	d.shown = true
+	// Critical: match canvas size or Layout gets 0×0 and clamps the panel to (0,0).
+	cs := d.canvas.Size()
+	if cs.Width < 1 {
+		cs.Width = 800
+	}
+	if cs.Height < 1 {
+		cs.Height = 600
+	}
+	d.BaseWidget.Resize(cs)
 	d.BaseWidget.Show()
 	d.Refresh()
 }
@@ -396,24 +407,56 @@ func (r *darkOverlayRenderer) Destroy() {}
 func (r *darkOverlayRenderer) Objects() []fyne.CanvasObject { return r.objects }
 func (r *darkOverlayRenderer) MinSize() fyne.Size {
 	if r.d.canvas != nil {
-		return r.d.canvas.Size()
+		cs := r.d.canvas.Size()
+		if cs.Width > 0 && cs.Height > 0 {
+			return cs
+		}
 	}
-	return fyne.NewSize(1, 1)
+	return fyne.NewSize(800, 600)
 }
 func (r *darkOverlayRenderer) Layout(size fyne.Size) {
+	// Keep overlay full-canvas if the window was resized.
+	if r.d.canvas != nil {
+		cs := r.d.canvas.Size()
+		if cs.Width > 0 && cs.Height > 0 && (cs.Width != size.Width || cs.Height != size.Height) {
+			size = cs
+			r.d.BaseWidget.Resize(cs)
+		}
+	}
+	if size.Width < 1 {
+		size.Width = 800
+	}
+	if size.Height < 1 {
+		size.Height = 600
+	}
 	if r.layer != nil {
 		r.layer.Resize(size)
 		r.layer.Move(fyne.NewPos(0, 0))
 	}
-	// Keep panel at requested size/pos (clamp into canvas).
-	ps := r.d.panel.MinSize()
-	if r.d.panelSize.Width > ps.Width {
-		ps.Width = r.d.panelSize.Width
+	// Resolve panel size.
+	ps := r.d.panelSize
+	if ps.Width < 1 || ps.Height < 1 {
+		ps = r.d.panel.MinSize()
 	}
-	if r.d.panelSize.Height > ps.Height {
-		ps.Height = r.d.panelSize.Height
+	ms := r.d.panel.MinSize()
+	if ps.Width < ms.Width {
+		ps.Width = ms.Width
 	}
+	if ps.Height < ms.Height {
+		ps.Height = ms.Height
+	}
+	if ps.Width < 200 {
+		ps.Width = 200
+	}
+	if ps.Height < 80 {
+		ps.Height = 80
+	}
+
 	pos := r.d.panelPos
+	if r.d.center {
+		pos = fyne.NewPos((size.Width-ps.Width)/2, (size.Height-ps.Height)/2)
+	}
+	// Clamp into canvas (do not snap a valid center to 0,0).
 	if pos.X+ps.Width > size.Width {
 		pos.X = size.Width - ps.Width
 	}
@@ -432,6 +475,14 @@ func (r *darkOverlayRenderer) Layout(size fyne.Size) {
 	r.d.panel.Move(pos)
 }
 func (r *darkOverlayRenderer) Refresh() {
+	// Sync size to canvas on every refresh (same pattern as Fyne PopUp).
+	if r.d.canvas != nil {
+		cs := r.d.canvas.Size()
+		if cs.Width > 0 && cs.Height > 0 && r.d.Size() != cs {
+			r.d.BaseWidget.Resize(cs)
+			r.Layout(cs)
+		}
+	}
 	if r.layer != nil {
 		r.layer.Refresh()
 	}
@@ -439,7 +490,17 @@ func (r *darkOverlayRenderer) Refresh() {
 	canvas.Refresh(r.d)
 }
 
+// showDarkPanelOverlayAt shows a dark panel at canvas-absolute pos.
 func (ui *sessionUI) showDarkPanelOverlay(panel fyne.CanvasObject, pos fyne.Position) {
+	ui.showDarkPanelOverlayOpts(panel, pos, false, fyne.NewSize(0, 0))
+}
+
+// showDarkPanelOverlayCentered centers a dark panel of the given size.
+func (ui *sessionUI) showDarkPanelOverlayCentered(panel fyne.CanvasObject, size fyne.Size) {
+	ui.showDarkPanelOverlayOpts(panel, fyne.NewPos(0, 0), true, size)
+}
+
+func (ui *sessionUI) showDarkPanelOverlayOpts(panel fyne.CanvasObject, pos fyne.Position, center bool, fixed fyne.Size) {
 	if ui.win == nil {
 		return
 	}
@@ -449,13 +510,16 @@ func (ui *sessionUI) showDarkPanelOverlay(panel fyne.CanvasObject, pos fyne.Posi
 	c := ui.win.Canvas()
 	th := darkPanelTheme{Theme: theme.Current()}
 	themed := container.NewThemeOverride(panel, th)
-	ps := themed.MinSize()
-	// Honor explicit Resize on the panel (e.g. Type dialog 480×280).
-	if panel.Size().Width > ps.Width {
-		ps.Width = panel.Size().Width
-	}
-	if panel.Size().Height > ps.Height {
-		ps.Height = panel.Size().Height
+
+	ps := fixed
+	if ps.Width < 1 || ps.Height < 1 {
+		ps = themed.MinSize()
+		if panel.Size().Width > ps.Width {
+			ps.Width = panel.Size().Width
+		}
+		if panel.Size().Height > ps.Height {
+			ps.Height = panel.Size().Height
+		}
 	}
 	if ps.Width < 200 {
 		ps.Width = 200
@@ -463,11 +527,22 @@ func (ui *sessionUI) showDarkPanelOverlay(panel fyne.CanvasObject, pos fyne.Posi
 	if ps.Height < 80 {
 		ps.Height = 80
 	}
+
+	// If anchor pos is degenerate and not centering, fall back to center.
+	cs := c.Size()
+	if !center && (cs.Width > 0 && cs.Height > 0) {
+		if pos.X <= 0 && pos.Y <= 0 {
+			// AbsolutePositionForObject failed or returned origin — center instead.
+			center = true
+		}
+	}
+
 	ov := &darkOverlay{
 		canvas:    c,
 		panel:     themed,
 		panelPos:  pos,
 		panelSize: ps,
+		center:    center,
 	}
 	ov.ExtendBaseWidget(ov)
 	ov.onDismiss = func() {
@@ -548,12 +623,18 @@ func (ui *sessionUI) showChromeSendKeysMenu(anchor fyne.CanvasObject) {
 	bg.StrokeWidth = 1
 	body := container.NewStack(bg, container.NewPadded(scroll))
 
-	pos := fyne.NewPos(8, 40)
+	pos := fyne.NewPos(0, 0)
 	if anchor != nil {
 		ap := fyne.CurrentApp().Driver().AbsolutePositionForObject(anchor)
+		// Canvas-absolute position just below the Keys control.
 		pos = fyne.NewPos(ap.X, ap.Y+anchor.Size().Height+2)
+		// Guard against (0,0) from a not-yet-laid-out anchor — center instead.
+		if ap.X > 1 || ap.Y > 1 {
+			ui.showDarkPanelOverlay(body, pos)
+			return
+		}
 	}
-	ui.showDarkPanelOverlay(body, pos)
+	ui.showDarkPanelOverlayCentered(body, fyne.NewSize(210, 280))
 }
 
 func (ui *sessionUI) showChromeMoreMenu(anchor fyne.CanvasObject) {
