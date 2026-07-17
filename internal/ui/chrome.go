@@ -185,7 +185,8 @@ func chromeIconBtn(label string, icon fyne.Resource, fn func()) *widget.Button {
 // Returns the overlay CanvasObject to place above the mouse pad in a Stack.
 // CAD lives under Keys ▾ (and the secure-attention hotkey), not on the pill/More.
 func (ui *sessionUI) installChrome() fyne.CanvasObject {
-	pinBtn := chromeIconBtn("", theme.ViewRestoreIcon(), func() {
+	// Pin: labeled + check icon (not window-restore/eye). Shows keep-bar-visible state.
+	pinBtn := chromeIconBtn("Pin", theme.CheckButtonIcon(), func() {
 		ui.toggleChromePin()
 	})
 
@@ -213,11 +214,12 @@ func (ui *sessionUI) installChrome() fyne.CanvasObject {
 	})
 
 	var sendBtn *widget.Button
-	sendBtn = chromeIconBtn("Keys ▾", theme.MailSendIcon(), func() {
+	sendBtn = chromeIconBtn("Keys", theme.MenuDropDownIcon(), func() {
 		ui.showChromeSendKeysMenu(sendBtn)
 	})
+	// Icon-only More: MoreHorizontalIcon is already "…"; do not also set text "···".
 	var moreBtn *widget.Button
-	moreBtn = chromeIconBtn("···", theme.MoreHorizontalIcon(), func() {
+	moreBtn = chromeIconBtn("", theme.MoreHorizontalIcon(), func() {
 		ui.showChromeMoreMenu(moreBtn)
 	})
 
@@ -474,12 +476,13 @@ func (ui *sessionUI) toggleChromePin() {
 	c.mu.Unlock()
 
 	if c.pinBtn != nil {
-		// Icon-only pin: keep medium importance (white labels); swap icon when pinned.
 		c.pinBtn.Importance = widget.MediumImportance
 		if pinned {
-			c.pinBtn.SetIcon(theme.VisibilityIcon())
+			c.pinBtn.SetText("Unpin")
+			c.pinBtn.SetIcon(theme.CheckButtonCheckedIcon())
 		} else {
-			c.pinBtn.SetIcon(theme.ViewRestoreIcon())
+			c.pinBtn.SetText("Pin")
+			c.pinBtn.SetIcon(theme.CheckButtonIcon())
 		}
 		c.pinBtn.Refresh()
 	}
