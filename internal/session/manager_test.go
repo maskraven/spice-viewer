@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maskraven/virt-viewer/internal/codec/h264"
 	"github.com/maskraven/virt-viewer/internal/connector"
 	"github.com/maskraven/virt-viewer/internal/protocol"
 	"github.com/maskraven/virt-viewer/internal/session"
@@ -434,6 +435,25 @@ func TestOpenChannels_MultiChannel_SessionIDAndReEncrypt(t *testing.T) {
 	}
 	if protocol.HasCap(pbMess.ChannelCaps, protocol.PlaybackCapOpus) {
 		t.Fatal("playback must not advertise OPUS (RAW preferred)")
+	}
+
+	// Display: MULTI_CODEC + MJPEG always; H.264 only when h264.Available().
+	dispMess := childByType.mess[protocol.ChannelDisplay]
+	wantDisp := protocol.DisplayChannelCaps(h264.Available())
+	for _, bit := range []uint{
+		protocol.DisplayCapSizedStream,
+		protocol.DisplayCapMultiCodec,
+		protocol.DisplayCapCodecMJPEG,
+	} {
+		if !protocol.HasCap(dispMess.ChannelCaps, bit) {
+			t.Fatalf("display missing cap bit %d: %v", bit, dispMess.ChannelCaps)
+		}
+	}
+	gotH264 := protocol.HasCap(dispMess.ChannelCaps, protocol.DisplayCapCodecH264)
+	wantH264 := protocol.HasCap(wantDisp, protocol.DisplayCapCodecH264)
+	if gotH264 != wantH264 {
+		t.Fatalf("display CODEC_H264=%v want %v (h264.Available=%v caps=%v)",
+			gotH264, wantH264, h264.Available(), dispMess.ChannelCaps)
 	}
 
 	for i := 0; i < n; i++ {

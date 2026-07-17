@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/maskraven/virt-viewer/internal/channel"
+	"github.com/maskraven/virt-viewer/internal/codec/h264"
 	"github.com/maskraven/virt-viewer/internal/protocol"
 	"github.com/maskraven/virt-viewer/internal/security"
 	"github.com/maskraven/virt-viewer/internal/ux"
@@ -358,8 +359,12 @@ func (s *Session) dialAndLinkChild(ctx context.Context, connectionID uint32, ch 
 	// Inputs: KEY_SCANCODE (spice-gtk always sets SPICE_INPUTS_CAP_KEY_SCANCODE).
 	// Playback: VOLUME only (no OPUS/CELT) so the server prefers RAW PCM, which
 	// Phase 2 decodes without cgo/native audio codecs.
+	// Display: MULTI_CODEC + MJPEG always; CODEC_H264 only when h264.Available()
+	// (OS decoder on macOS/Windows; user FFmpeg on Linux — never advertise when false).
 	var channelCaps []uint32
 	switch ch.Type {
+	case protocol.ChannelDisplay:
+		channelCaps = protocol.DisplayChannelCaps(h264.Available())
 	case protocol.ChannelInputs:
 		channelCaps = protocol.CapsFromBits(protocol.InputsCapKeyScancode)
 	case protocol.ChannelPlayback:

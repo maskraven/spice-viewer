@@ -257,6 +257,27 @@ func TestCapsHelpers(t *testing.T) {
 	}
 }
 
+func TestDisplayChannelCaps(t *testing.T) {
+	noH264 := DisplayChannelCaps(false)
+	for _, bit := range []uint{DisplayCapSizedStream, DisplayCapMultiCodec, DisplayCapCodecMJPEG} {
+		if !HasCap(noH264, bit) {
+			t.Fatalf("missing base bit %d in %v", bit, noH264)
+		}
+	}
+	if HasCap(noH264, DisplayCapCodecH264) {
+		t.Fatal("H.264 must not be advertised when h264Available=false")
+	}
+	withH264 := DisplayChannelCaps(true)
+	if !HasCap(withH264, DisplayCapCodecH264) {
+		t.Fatalf("expected CODEC_H264 bit %d in %v", DisplayCapCodecH264, withH264)
+	}
+	// spice-protocol: MultiCodec=8, CodecMJPEG=9, CodecH264=11
+	if DisplayCapMultiCodec != 8 || DisplayCapCodecMJPEG != 9 || DisplayCapCodecH264 != 11 {
+		t.Fatalf("display cap indices drifted: multi=%d mjpeg=%d h264=%d",
+			DisplayCapMultiCodec, DisplayCapCodecMJPEG, DisplayCapCodecH264)
+	}
+}
+
 func TestChildLinkMess(t *testing.T) {
 	m := NewChildLinkMess(0xabc, ChannelDisplay, 0, nil)
 	if m.ConnectionID != 0xabc || m.ChannelType != ChannelDisplay {

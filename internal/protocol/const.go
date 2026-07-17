@@ -118,12 +118,12 @@ const (
 
 // Main channel server messages (spice/enums.h; start at MsgFirstAvail).
 const (
-	MsgMainMigrateBegin      uint16 = 101
-	MsgMainMigrateCancel     uint16 = 102
-	MsgMainInit              uint16 = 103 // SPICE_MSG_MAIN_INIT
-	MsgMainChannelsList      uint16 = 104 // SPICE_MSG_MAIN_CHANNELS_LIST
-	MsgMainMouseMode         uint16 = 105
-	MsgMainMultiMediaTime    uint16 = 106
+	MsgMainMigrateBegin         uint16 = 101
+	MsgMainMigrateCancel        uint16 = 102
+	MsgMainInit                 uint16 = 103 // SPICE_MSG_MAIN_INIT
+	MsgMainChannelsList         uint16 = 104 // SPICE_MSG_MAIN_CHANNELS_LIST
+	MsgMainMouseMode            uint16 = 105
+	MsgMainMultiMediaTime       uint16 = 106
 	MsgMainAgentConnected       uint16 = 107
 	MsgMainAgentDisconnected    uint16 = 108
 	MsgMainAgentData            uint16 = 109
@@ -204,6 +204,26 @@ const InputMotionAckBunch = 4
 // Inputs channel capability bit indices.
 const (
 	InputsCapKeyScancode = 0 // SPICE_INPUTS_CAP_KEY_SCANCODE
+)
+
+// Display channel capability bit indices (SpiceDisplayCaps / spice/enums.h order).
+// Bit index n is advertised as (1 << n) in the channel-caps word vector.
+const (
+	DisplayCapSizedStream        = 0  // SPICE_DISPLAY_CAP_SIZED_STREAM
+	DisplayCapMonitorsConfig     = 1  // SPICE_DISPLAY_CAP_MONITORS_CONFIG
+	DisplayCapComposite          = 2  // SPICE_DISPLAY_CAP_COMPOSITE
+	DisplayCapA8Surface          = 3  // SPICE_DISPLAY_CAP_A8_SURFACE
+	DisplayCapStreamReport       = 4  // SPICE_DISPLAY_CAP_STREAM_REPORT
+	DisplayCapLZ4Compression     = 5  // SPICE_DISPLAY_CAP_LZ4_COMPRESSION
+	DisplayCapPrefCompression    = 6  // SPICE_DISPLAY_CAP_PREF_COMPRESSION
+	DisplayCapGLScanout          = 7  // SPICE_DISPLAY_CAP_GL_SCANOUT
+	DisplayCapMultiCodec         = 8  // SPICE_DISPLAY_CAP_MULTI_CODEC
+	DisplayCapCodecMJPEG         = 9  // SPICE_DISPLAY_CAP_CODEC_MJPEG
+	DisplayCapCodecVP8           = 10 // SPICE_DISPLAY_CAP_CODEC_VP8
+	DisplayCapCodecH264          = 11 // SPICE_DISPLAY_CAP_CODEC_H264
+	DisplayCapPrefVideoCodecType = 12 // SPICE_DISPLAY_CAP_PREF_VIDEO_CODEC_TYPE
+	DisplayCapCodecVP9           = 13 // SPICE_DISPLAY_CAP_CODEC_VP9
+	DisplayCapCodecH265          = 14 // SPICE_DISPLAY_CAP_CODEC_H265
 )
 
 // Wire body sizes (packed, little-endian; from spice.proto).
@@ -491,4 +511,87 @@ const (
 	PlaybackMuteSize = 1
 	// PlaybackVolumeMinSize is nchannels u8 (volume array follows).
 	PlaybackVolumeMinSize = 1
+)
+
+// Record channel server messages (spice/enums.h; start at MsgFirstAvail).
+// Note: record has no MODE/DATA server messages — the client sends those.
+const (
+	MsgRecordStart  uint16 = 101 // SPICE_MSG_RECORD_START
+	MsgRecordStop   uint16 = 102 // SPICE_MSG_RECORD_STOP
+	MsgRecordVolume uint16 = 103 // SPICE_MSG_RECORD_VOLUME
+	MsgRecordMute   uint16 = 104 // SPICE_MSG_RECORD_MUTE
+)
+
+// Record channel client messages (client → server).
+const (
+	MsgcRecordData      uint16 = 101 // SPICE_MSGC_RECORD_DATA
+	MsgcRecordMode      uint16 = 102 // SPICE_MSGC_RECORD_MODE
+	MsgcRecordStartMark uint16 = 103 // SPICE_MSGC_RECORD_START_MARK
+)
+
+// Record channel capability bit indices (spice/protocol.h).
+// Differ from playback: no LATENCY bit, so OPUS is bit 2 (playback OPUS is bit 3).
+const (
+	RecordCapCELT051 = 0 // SPICE_RECORD_CAP_CELT_0_5_1 (deprecated)
+	RecordCapVolume  = 1 // SPICE_RECORD_CAP_VOLUME
+	RecordCapOpus    = 2 // SPICE_RECORD_CAP_OPUS
+)
+
+// Wire body sizes for fixed record messages (packed, little-endian; spice.proto).
+const (
+	// RecordStartSize is channels u32 + format enum16 + frequency u32 (no time).
+	RecordStartSize = 10
+	// RecordModeFixedSize is time u32 + mode enum16 (client RECORD_MODE; same layout as playback MODE).
+	RecordModeFixedSize = PlaybackModeFixedSize
+	// RecordDataHeaderSize is the time u32 prefix of client RECORD_DATA.
+	RecordDataHeaderSize = PlaybackDataHeaderSize
+	// RecordStartMarkSize is time u32.
+	RecordStartMarkSize = 4
+	// RecordMuteSize is mute u8.
+	RecordMuteSize = PlaybackMuteSize
+	// RecordVolumeMinSize is nchannels u8 (volume array follows).
+	RecordVolumeMinSize = PlaybackVolumeMinSize
+)
+
+// SpiceVMC channel messages (usbredir / port / webdav base; spice/enums.h).
+// Used by ChannelUSBRedir (pure VMC), ChannelPort, and ChannelWebDAV (Port+VMC).
+const (
+	MsgSpiceVMCData           uint16 = 101 // SPICE_MSG_SPICEVMC_DATA
+	MsgSpiceVMCCompressedData uint16 = 102 // SPICE_MSG_SPICEVMC_COMPRESSED_DATA
+	MsgcSpiceVMCData           uint16 = 101 // SPICE_MSGC_SPICEVMC_DATA
+	MsgcSpiceVMCCompressedData uint16 = 102 // SPICE_MSGC_SPICEVMC_COMPRESSED_DATA
+)
+
+// SpiceVMC channel capability bit indices.
+const (
+	SpiceVMCCapDataCompressLZ4 = 0 // SPICE_SPICEVMC_CAP_DATA_COMPRESS_LZ4
+)
+
+// Data compression types (SpiceDataCompressionType) for VMC compressed frames.
+const (
+	DataCompressNone uint8 = 0 // SPICE_DATA_COMPRESSION_TYPE_NONE
+	DataCompressLZ4  uint8 = 1 // SPICE_DATA_COMPRESSION_TYPE_LZ4
+)
+
+// Port channel messages (on top of SpiceVMC; WebDAV inherits Port).
+const (
+	MsgPortInit  uint16 = 201 // SPICE_MSG_PORT_INIT
+	MsgPortEvent uint16 = 202 // SPICE_MSG_PORT_EVENT
+	MsgcPortEvent uint16 = 201 // SPICE_MSGC_PORT_EVENT
+)
+
+// Port events (SpicePortEvent).
+const (
+	PortEventOpened uint8 = 0 // SPICE_PORT_EVENT_OPENED
+	PortEventClosed uint8 = 1 // SPICE_PORT_EVENT_CLOSED
+	PortEventBreak  uint8 = 2 // SPICE_PORT_EVENT_BREAK
+)
+
+// CompressedDataHeaderSize is type u8 + uncompressed_size u32 when type != NONE.
+// For NONE the uncompressed_size field is absent (only type byte + payload).
+const (
+	// VMCCompressedTypeSize is the compression-type enum8 prefix.
+	VMCCompressedTypeSize = 1
+	// VMCCompressedHeaderFull is type u8 + uncompressed_size u32 (non-NONE path).
+	VMCCompressedHeaderFull = 5
 )

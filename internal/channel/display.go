@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/maskraven/virt-viewer/internal/codec"
+	"github.com/maskraven/virt-viewer/internal/codec/h264"
 	"github.com/maskraven/virt-viewer/internal/display"
 	"github.com/maskraven/virt-viewer/internal/protocol"
 )
@@ -23,7 +24,8 @@ import (
 // opaqueBlack is used when soft-skipping a failed DRAW_COPY (leave region black).
 var opaqueBlack = [4]byte{0, 0, 0, 0xff}
 
-// displayStream tracks an active SPICE video stream (Phase-2: MJPEG only).
+// displayStream tracks an active SPICE video stream (MJPEG; H.264 when
+// h264.Available — OS decoder on macOS/Windows, user FFmpeg on Linux).
 type displayStream struct {
 	surfaceID uint32
 	id        uint32
@@ -35,6 +37,7 @@ type displayStream struct {
 	srcH      uint32
 	dest      image.Rectangle
 	clips     []image.Rectangle // nil = unclipped
+	h264      h264.Decoder      // non-nil for VideoCodecH264 streams
 }
 
 // imageCache holds decoded images for SPICE_IMAGE_TYPE_FROM_CACHE lookups.
@@ -677,10 +680,26 @@ func (d *Display) handleStreamCreate(data []byte) {
 		return
 	}
 
-	if codecType != protocol.VideoCodecMJPEG {
+	var h264Dec h264.Decoder
+	switch codecType {
+	case protocol.VideoCodecMJPEG:
+		// stdlib jpeg path
+	case protocol.VideoCodecH264:
+		// macOS VideoToolbox / Windows Media Foundation / Linux user FFmpeg.
+		// Never bundle FFmpeg; Available() is false when the backend is missing.
+		if !h264.Available() {
+			d.noteDrawSkip(fmt.Sprintf("STREAM_CREATE H.264 unsupported on this platform (stream %d)", id))
+			return
+		}
+		dec, err := h264.New()
+		if err != nil {
+			d.noteDrawSkip(fmt.Sprintf("STREAM_CREATE H.264 init: %v (stream %d)", err, id))
+			return
+		}
+		h264Dec = dec
+	default:
 		d.noteDrawSkip(fmt.Sprintf("STREAM_CREATE unsupported codec %d (stream %d)", codecType, id))
-		// Still record so later DATA soft-skips cleanly? Prefer not to store
-		// unsupported codecs — DATA will note "unknown stream".
+		// Prefer not to store unsupported codecs — DATA will note "unknown stream".
 		return
 	}
 
@@ -695,10 +714,15 @@ func (d *Display) handleStreamCreate(data []byte) {
 		srcH:      srcH,
 		dest:      dest,
 		clips:     clips,
+		h264:      h264Dec,
 	}
 	d.mu.Lock()
 	if d.streams == nil {
 		d.streams = make(map[uint32]*displayStream)
+	}
+	// Replace existing stream id: close prior H.264 decoder if any.
+	if old := d.streams[id]; old != nil && old.h264 != nil {
+		old.h264.Close()
 	}
 	d.streams[id] = st
 	d.mu.Unlock()
@@ -758,14 +782,27 @@ func (d *Display) handleStreamData(data []byte, sized bool) {
 	}
 	frame := data[off : off+int(dataSize)]
 
-	if st.codec != protocol.VideoCodecMJPEG {
-		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA codec %d not MJPEG", st.codec))
-		return
-	}
-
-	img, err := codec.DecodeJPEGBytes(frame)
-	if err != nil {
-		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA mjpeg: %v", err))
+	var img *codec.RGBA
+	var err error
+	switch st.codec {
+	case protocol.VideoCodecMJPEG:
+		img, err = codec.DecodeJPEGBytes(frame)
+		if err != nil {
+			d.noteDrawSkip(fmt.Sprintf("STREAM_DATA mjpeg: %v", err))
+			return
+		}
+	case protocol.VideoCodecH264:
+		if st.h264 == nil {
+			d.noteDrawSkip(fmt.Sprintf("STREAM_DATA H.264 stream %d has no decoder", id))
+			return
+		}
+		img, err = st.h264.Decode(frame, int(st.streamW), int(st.streamH))
+		if err != nil {
+			d.noteDrawSkip(fmt.Sprintf("STREAM_DATA h264: %v", err))
+			return
+		}
+	default:
+		d.noteDrawSkip(fmt.Sprintf("STREAM_DATA codec %d unsupported", st.codec))
 		return
 	}
 	// BOTTOM-UP stream: flip when TOP_DOWN flag is clear.
@@ -816,12 +853,20 @@ func (d *Display) handleStreamDestroy(data []byte) {
 	}
 	id := binary.LittleEndian.Uint32(data[0:4])
 	d.mu.Lock()
+	if st := d.streams[id]; st != nil && st.h264 != nil {
+		st.h264.Close()
+	}
 	delete(d.streams, id)
 	d.mu.Unlock()
 }
 
 func (d *Display) handleStreamDestroyAll() {
 	d.mu.Lock()
+	for _, st := range d.streams {
+		if st != nil && st.h264 != nil {
+			st.h264.Close()
+		}
+	}
 	d.streams = make(map[uint32]*displayStream)
 	d.mu.Unlock()
 }

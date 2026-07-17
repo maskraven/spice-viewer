@@ -48,12 +48,25 @@ Package layout:
 
 ```text
 internal/codec/h264/
-  h264.go            // Decoder interface, Available(), New()
-  decode_darwin.go   // VideoToolbox (+ cgo)
-  decode_windows.go  // Media Foundation (+ cgo)
-  decode_linux.go    // User FFmpeg (dynlink or subprocess); soft-skip if missing
-  decode_stub.go     // other GOOS / no backend
+  h264.go                 // Decoder interface, Available(), New()
+  decode_darwin.go        // VideoToolbox (+ cgo)
+  decode_windows.go       // Media Foundation (+ cgo); Available true, pixel path partial
+  decode_windows_nocgo.go // Windows CGO_ENABLED=0 fallback (Available true, soft-skip)
+  decode_linux.go         // User FFmpeg CLI subprocess (PATH probe); Available only if found
+  decode_stub.go          // other GOOS (!darwin && !windows && !linux)
 ```
+
+Linux backend starts one stateful `ffmpeg` process per stream decoder:
+
+```text
+ffmpeg -hide_banner -loglevel error \
+  -probesize 32 -analyzeduration 0 \
+  -fflags nobuffer -flags low_delay \
+  -f h264 -i pipe:0 \
+  -f rawvideo -pix_fmt rgba pipe:1
+```
+
+Dimensions come from `STREAM_CREATE` hints or a minimal SPS parse when hints are 0.
 
 ### Linux: install FFmpeg
 

@@ -46,6 +46,23 @@ func Phase1CommonCaps() []uint32 {
 	)
 }
 
+// DisplayChannelCaps returns the display channel capability vector.
+// Always advertises sized streams, multi-codec, and MJPEG (stdlib JPEG).
+// When h264Available is true, also sets DisplayCapCodecH264 so the server
+// may emit H.264 streams; callers must pass h264.Available() (or equivalent)
+// and must not advertise H.264 when the decoder backend is missing.
+func DisplayChannelCaps(h264Available bool) []uint32 {
+	bits := []uint{
+		DisplayCapSizedStream,
+		DisplayCapMultiCodec,
+		DisplayCapCodecMJPEG,
+	}
+	if h264Available {
+		bits = append(bits, DisplayCapCodecH264)
+	}
+	return CapsFromBits(bits...)
+}
+
 // IntersectCaps returns the bitwise AND of two cap vectors (word-wise),
 // truncated to the shorter length.
 func IntersectCaps(a, b []uint32) []uint32 {
