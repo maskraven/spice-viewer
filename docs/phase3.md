@@ -22,7 +22,7 @@ GPL spice-common.
 | Platform | Backend | Shipping |
 |----------|---------|----------|
 | **macOS** | VideoToolbox (`VTDecompressionSession`) | Built into the binary via system frameworks |
-| **Windows** | Media Foundation H.264 MFT | Built into the binary via system APIs |
+| **Windows** | Media Foundation `CLSID_CMSH264DecoderMFT` | Built into the binary via system APIs (cgo) |
 | **Linux** | **User-provided FFmpeg** (libavcodec / `ffmpeg` CLI or dynload) | **Not bundled** — install via distro packages |
 
 **Default product policy**
@@ -50,7 +50,7 @@ Package layout:
 internal/codec/h264/
   h264.go                 // Decoder interface, Available(), New()
   decode_darwin.go        // VideoToolbox (+ cgo)
-  decode_windows.go       // Media Foundation (+ cgo); Available true, pixel path partial
+  decode_windows.go       // Media Foundation CLSID_CMSH264DecoderMFT (+ cgo) → NV12→RGBA
   decode_windows_nocgo.go // Windows CGO_ENABLED=0 fallback (Available true, soft-skip)
   decode_linux.go         // User FFmpeg CLI subprocess (PATH probe); Available only if found
   decode_stub.go          // other GOOS (!darwin && !windows && !linux)
@@ -67,6 +67,20 @@ ffmpeg -hide_banner -loglevel error \
 ```
 
 Dimensions come from `STREAM_CREATE` hints or a minimal SPS parse when hints are 0.
+
+### Windows Media Foundation path
+
+cgo build (`windows && cgo`) in `decode_windows.go`:
+
+1. `CoInitializeEx` + `MFStartup` (process refcounted)
+2. `CoCreateInstance(CLSID_CMSH264DecoderMFT)` → `IMFTransform`
+3. Input type: `MFMediaType_Video` / `MFVideoFormat_H264` (Annex-B with start codes; optional frame size from `STREAM_CREATE`)
+4. Output type: preferred `MFVideoFormat_NV12` via `GetOutputAvailableType` / `SetOutputType`
+5. Low-latency best-effort: `CODECAPI_AVLowLatencyMode`
+6. Per access unit: `ProcessInput` → `ProcessOutput` loop, handling `MF_E_TRANSFORM_STREAM_CHANGE` (re-negotiate NV12 geometry)
+7. Software NV12 → RGBA8888 (BT.601 limited range); soft-skip on need-more-input / bad frames
+
+`CGO_ENABLED=0` uses `decode_windows_nocgo.go` (`Available()==true`, Decode soft-fails) so pure-Go cross-compiles still advertise the cap consistently with cgo product builds.
 
 ### Linux: install FFmpeg
 
@@ -232,7 +246,7 @@ internal/audio/
 
 ## Acceptance (measurable)
 
-1. On macOS or Windows with H.264 guest stream: frames present without FFmpeg.
+1. On macOS (VideoToolbox) or Windows (Media Foundation MFT → RGBA) with H.264 guest stream: frames present without FFmpeg.
 2. Linux without FFmpeg: soft-skip H.264; session + other codecs still work.
 3. Linux with distro FFmpeg installed and discoverable: H.264 streams decode (when backend lands).
 4. Record/USB/WebDAV open as best-effort when listed; session survives absence.

@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - See [docs/phase3.md](docs/phase3.md#host-audio)
 - **H.264 display streams** (`internal/codec/h264`):
   - **macOS**: VideoToolbox (`VTDecompressionSession`) via cgo
-  - **Windows**: Media Foundation scaffold (`Available()=true`; pixel output still soft-skips until full MFT lands)
+  - **Windows**: Media Foundation `CLSID_CMSH264DecoderMFT` via cgo — Annex-B input, NV12→RGBA output (`Available()=true`; `CGO_ENABLED=0` soft-skips)
   - **Linux**: user-provided **FFmpeg** CLI on `PATH` (never bundled; `Available()` only when probe finds h264)
   - Display channel advertises `MULTI_CODEC` + `CODEC_MJPEG` always; `CODEC_H264` only when `h264.Available()`
   - STREAM_CREATE/DATA soft-skips decode failures; install notes in [docs/phase3.md](docs/phase3.md#linux-install-ffmpeg)
@@ -34,7 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Planned (Phase 3+)
 
-- Complete Windows Media Foundation pixel path
 - Real mic capture (`RecordDriver` host backend) and USB host stack (libusb/platform)
 - Full WebDAV/phodav share UX beyond message-loop scaffold
 - Linux host audio (ALSA/Pulse) beyond the current stub

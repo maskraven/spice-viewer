@@ -5,7 +5,7 @@
 //
 // Platform backends (see docs/phase3.md):
 //   - macOS: VideoToolbox (system framework, cgo)
-//   - Windows: Media Foundation (system APIs, cgo; pixel output may be partial)
+//   - Windows: Media Foundation H.264 MFT (system APIs, cgo → RGBA)
 //   - Linux: user-provided FFmpeg CLI on PATH (never bundled; subprocess)
 //   - other GOOS: stub with Available() == false
 //
