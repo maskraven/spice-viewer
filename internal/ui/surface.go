@@ -25,6 +25,8 @@ type Surface struct {
 	// notify is invoked after Present / SetDesktopSize / Invalidate without
 	// holding s.mu (may schedule UI work).
 	notify func()
+	// onDesktopSize is invoked when the primary guest size changes (w,h > 0).
+	onDesktopSize func(w, h int)
 
 	PresentCount    int
 	InvalidateCount int
@@ -42,6 +44,14 @@ func (s *Surface) SetNotify(fn func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.notify = fn
+}
+
+// SetOnDesktopSize registers a callback for primary surface dimension changes.
+// Invoked without holding s.mu (may schedule UI work).
+func (s *Surface) SetOnDesktopSize(fn func(w, h int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onDesktopSize = fn
 }
 
 func (s *Surface) fireNotify() {
@@ -68,7 +78,11 @@ func (s *Surface) SetDesktopSize(w, h int) {
 		s.stride = 0
 		s.pix = nil
 	}
+	onSize := s.onDesktopSize
 	s.mu.Unlock()
+	if onSize != nil && w > 0 && h > 0 {
+		onSize(w, h)
+	}
 	s.fireNotify()
 }
 

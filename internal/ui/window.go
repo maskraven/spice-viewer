@@ -48,6 +48,11 @@ type sessionUI struct {
 	// pressed tracks scancodes currently down in the guest (spice-gtk key_state).
 	// On ungrab/focus-loss we KEY_UP all of them to avoid stuck keys.
 	pressed map[uint16]struct{}
+	// fittedOnce is true after the window was sized to the guest aspect ratio.
+	fittedOnce bool
+	// fitting is true while we apply a programmatic window resize (suppress
+	// agent guest-resize feedback loops for that reflow).
+	fitting bool
 	fs      bool
 	closed  bool
 }
@@ -81,8 +86,12 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 	ui.statusStrip = newStatusBar("Connecting…")
 	content := container.NewBorder(nil, ui.statusStrip, nil, nil, stage)
 	win.SetContent(content)
+	// Placeholder until primary surface size arrives (then match guest ratio).
 	win.Resize(fyne.NewSize(1024, 768))
 	win.SetMaster()
+
+	// First primary surface size → match window aspect ratio to remote desktop.
+	surface.SetOnDesktopSize(ui.onGuestDesktopSize)
 
 	if startFullscreen {
 		win.SetFullScreen(true)
@@ -95,6 +104,110 @@ func newSessionUI(a fyne.App, surface *Surface, bind Bindings, title string, sta
 	// Default unpinned: brief peek then auto-hide.
 	ui.peekChrome()
 	return ui
+}
+
+// Default max content area when fitting the window to a large guest desktop.
+const (
+	fitMaxContentW float32 = 1280
+	fitMaxContentH float32 = 800
+	fitMinContentW float32 = 640
+	fitMinContentH float32 = 400
+)
+
+// onGuestDesktopSize is called from the display path when primary size is set.
+func (ui *sessionUI) onGuestDesktopSize(w, h int) {
+	if ui == nil || w <= 0 || h <= 0 {
+		return
+	}
+	apply := func() {
+		ui.fitWindowToGuest(w, h)
+	}
+	if fyne.CurrentApp() != nil {
+		fyne.Do(apply)
+		return
+	}
+	apply()
+}
+
+// fitWindowToGuest resizes the window so the guest viewport matches the remote
+// aspect ratio (once, on first known size). Skips fullscreen.
+func (ui *sessionUI) fitWindowToGuest(gw, gh int) {
+	if ui == nil || ui.win == nil || gw <= 0 || gh <= 0 {
+		return
+	}
+	ui.mu.Lock()
+	if ui.fittedOnce || ui.fs || ui.closed {
+		ui.mu.Unlock()
+		return
+	}
+	ui.fittedOnce = true
+	ui.fitting = true
+	ui.mu.Unlock()
+
+	cw, ch := fitContentSize(float32(gw), float32(gh), fitMaxContentW, fitMaxContentH, fitMinContentW, fitMinContentH)
+
+	// Status strip sits under the guest stage; add its height to the window.
+	var statusH float32
+	if ui.statusStrip != nil && ui.statusStrip.Visible() {
+		statusH = ui.statusStrip.MinSize().Height
+	}
+	if statusH < 1 {
+		statusH = 22
+	}
+
+	if ui.view != nil {
+		ui.view.minW = cw
+		ui.view.minH = ch
+	}
+	ui.win.Resize(fyne.NewSize(cw, ch+statusH))
+	ui.win.Content().Refresh()
+
+	ui.mu.Lock()
+	ui.fitting = false
+	ui.mu.Unlock()
+}
+
+// fitContentSize scales guest W×H into the max box while preserving aspect
+// ratio. Tiny guests are scaled up toward minW×minH if that still fits in max.
+func fitContentSize(gw, gh, maxW, maxH, minW, minH float32) (w, h float32) {
+	if gw <= 0 || gh <= 0 {
+		return minW, minH
+	}
+	if maxW < 1 {
+		maxW = 1
+	}
+	if maxH < 1 {
+		maxH = 1
+	}
+	// Fit into max box (contain).
+	scale := maxW / gw
+	if s := maxH / gh; s < scale {
+		scale = s
+	}
+	// Prefer native size when it already fits.
+	if scale > 1 {
+		scale = 1
+	}
+	// Scale up tiny desktops toward min, but never exceed max.
+	if gw*scale < minW || gh*scale < minH {
+		up := minW / gw
+		if s := minH / gh; s > up {
+			up = s
+		}
+		// Only apply upscale if the result still fits max.
+		if gw*up <= maxW+0.5 && gh*up <= maxH+0.5 {
+			scale = up
+		}
+	}
+	w = gw * scale
+	h = gh * scale
+	if w < 1 {
+		w = 1
+	}
+	if h < 1 {
+		h = 1
+	}
+	return w, h
 }
 
 // statusBar is a hairline + status line.
@@ -496,8 +609,15 @@ var (
 
 // requestGuestResize asks the guest (via vdagent) to match the current pad
 // size in logical pixels. Debounced 400ms; ignored when agent is offline.
+// Suppressed while fitWindowToGuest applies a programmatic size.
 func (ui *sessionUI) requestGuestResize() {
 	if ui.client == nil || !ui.client.AgentActive() || ui.pad == nil {
+		return
+	}
+	ui.mu.Lock()
+	fitting := ui.fitting
+	ui.mu.Unlock()
+	if fitting {
 		return
 	}
 	sz := ui.pad.Size()
